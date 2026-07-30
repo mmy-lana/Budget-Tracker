@@ -2,21 +2,27 @@
 /* cspell:disable */
 
 export default async function handler(req: any, res: any) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  if (req.method === 'GET') {
+    return res.status(200).json({ status: 'active', message: 'Telegram Webhook Endpoint Ready' });
+  }
+
   if (req.method !== 'POST') {
-    return res.status(200).send('Telegram Webhook Endpoint Active');
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
-    const update = req.body;
-    const message = update?.message || update?.edited_message;
+    const update = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    const message = update.message || update.edited_message;
 
     if (!message) {
-      return res.status(200).send('No message payload');
+      return res.status(200).json({ status: 'ok', detail: 'No message in update payload' });
     }
 
     const chatId = String(message.chat.id);
-    const TELEGRAM_BOT_TOKEN = process.env['TELEGRAM_BOT_TOKEN'] || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '';
-    const FIREBASE_PROJECT_ID = process.env['FIREBASE_PROJECT_ID'] || process.env['NG_APP_FIREBASE_PROJECT_ID'] || 'positive-harbor-723';
+    const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.NG_APP_TELEGRAM_BOT_TOKEN || '';
+    const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.NG_APP_FIREBASE_PROJECT_ID || 'positive-harbor-723';
 
     const rawText = message.text || message.caption || '';
 
@@ -34,7 +40,7 @@ export default async function handler(req: any, res: any) {
     const qtyMatch = rawText.match(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/i);
     const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-    // Category Classification
+    // Determine Category
     let category = 'food';
     if (/wifi|listrik|ipl|pulsa|kuota|laundry/i.test(rawText)) category = 'fixed';
     else if (/bensin|pertamax|parkir/i.test(rawText)) category = 'vehicle';
@@ -46,36 +52,33 @@ export default async function handler(req: any, res: any) {
       .replace(/^beli\s+/i, '')
       .trim() || 'Telegram Expense';
 
-    // Store in Firestore Database REST API
-    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
-    
-    await fetch(firestoreUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fields: {
-          title: { stringValue: title },
-          amount: { doubleValue: amount },
-          quantity: { integerValue: quantity },
-          category: { stringValue: category },
-          date: { stringValue: new Date().toISOString().split('T')[0] },
-          paymentMethod: { stringValue: 'qris' },
-          createdBy: { stringValue: `telegram_${chatId}` },
-          createdAt: { integerValue: Date.now() },
-          updatedAt: { integerValue: Date.now() }
-        }
-      })
-    });
+    // Store in Firestore Database
+    if (FIREBASE_PROJECT_ID) {
+      const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
+      await fetch(firestoreUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fields: {
+            title: { stringValue: title },
+            amount: { doubleValue: amount },
+            quantity: { integerValue: quantity },
+            category: { stringValue: category },
+            date: { stringValue: new Date().toISOString().split('T')[0] },
+            paymentMethod: { stringValue: 'qris' },
+            createdBy: { stringValue: `telegram_${chatId}` },
+            createdAt: { integerValue: Date.now() },
+            updatedAt: { integerValue: Date.now() }
+          }
+        })
+      }).catch((e) => console.error('Firestore REST Write Warning:', e));
+    }
 
-    // Send instant confirmation reply to Telegram
-    const tokenToUse = TELEGRAM_BOT_TOKEN || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '';
-
-    const replyText = tokenToUse 
-      ? `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}`
-      : `⚠️ *Token Missing in Vercel:* Please set TELEGRAM_BOT_TOKEN in Vercel Environment Variables.`;
-
-    if (tokenToUse) {
-      await fetch(`https://api.telegram.org/bot${tokenToUse}/sendMessage`, {
+    // Send Telegram Reply
+    if (TELEGRAM_BOT_TOKEN) {
+      const replyText = `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}`;
+      
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -83,23 +86,12 @@ export default async function handler(req: any, res: any) {
           text: replyText,
           parse_mode: 'Markdown'
         })
-      });
+      }).catch((e) => console.error('Telegram SendMessage Warning:', e));
     }
 
     return res.status(200).json({ success: true, title, amount });
   } catch (err: any) {
-    // Send execution error directly back to Telegram for debugging
-    const tokenToUse = process.env['TELEGRAM_BOT_TOKEN'] || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '';
-    if (tokenToUse && req.body?.message?.chat?.id) {
-      await fetch(`https://api.telegram.org/bot${tokenToUse}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: String(req.body.message.chat.id),
-          text: `❌ *Webhook Error:* ${err.message}`
-        })
-      });
-    }
-    return res.status(200).json({ error: err.message });
+    console.error('Webhook Invocation Error:', err);
+    return res.status(200).json({ error: String(err) });
   }
 }
