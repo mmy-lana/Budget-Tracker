@@ -197,9 +197,11 @@ module.exports = async (req, res) => {
     // Command: Nalangin Settlement ("lunas")
     if (cleanLower.includes('lunas') && (cleanLower.includes('tagihan') || cleanLower.includes('hutang'))) {
       const isTagihan = cleanLower.includes('tagihan');
-      const resNal = await fetch(`${nalanginUrl}&pageSize=50`);
-
       let targetDoc = null;
+      let isFallbackExpense = false;
+
+      // 1. Search in nalangin_ledger collection
+      const resNal = await fetch(buildFirestoreUrl('nalangin_ledger', 'pageSize=50'));
       if (resNal.ok) {
         const data = await resNal.json();
         if (data.documents && data.documents.length > 0) {
@@ -209,9 +211,10 @@ module.exports = async (req, res) => {
             const type = f.type?.stringValue || 'receivable';
             const person = (f.person?.stringValue || '').toLowerCase();
             const shortId = (f.shortId?.stringValue || '').toLowerCase();
+            const docId = doc.name.split('/').pop().toLowerCase();
 
             if (st === 'pending' && type === (isTagihan ? 'receivable' : 'payable')) {
-              if (cleanLower.includes(person) || cleanLower.includes(shortId) || data.documents.length === 1) {
+              if (cleanLower.includes(person) || (shortId && cleanLower.includes(shortId)) || cleanLower.includes(docId.substring(0, 6)) || data.documents.length === 1) {
                 targetDoc = doc;
                 break;
               }
@@ -220,55 +223,85 @@ module.exports = async (req, res) => {
         }
       }
 
+      // 2. Search in expenses collection for fallback entries
+      if (!targetDoc) {
+        const resExp = await fetch(buildFirestoreUrl('expenses', 'pageSize=50'));
+        if (resExp.ok) {
+          const dataExp = await resExp.json();
+          if (dataExp.documents && dataExp.documents.length > 0) {
+            for (const doc of dataExp.documents) {
+              const f = doc.fields || {};
+              const subCat = f.subCategory?.stringValue || '';
+              const title = f.title?.stringValue || '';
+              const isRec = subCat === 'receivable' || title.startsWith('[Tagihan]');
+              const isPay = subCat === 'payable' || title.startsWith('[Hutang]');
+
+              if ((isTagihan && isRec) || (!isTagihan && isPay)) {
+                const docId = doc.name.split('/').pop().toLowerCase();
+                const shortId = docId.substring(0, 6);
+                const personMatch = title.match(/\[(?:Tagihan|Hutang)\]\s*([^:]+):/i);
+                const person = personMatch ? personMatch[1].trim().toLowerCase() : '';
+
+                if (cleanLower.includes(shortId) || (person && cleanLower.includes(person)) || dataExp.documents.length === 1) {
+                  targetDoc = doc;
+                  isFallbackExpense = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+
       if (targetDoc) {
         const f = targetDoc.fields || {};
-        const person = f.person?.stringValue || 'Person';
-        const amt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
-        const notes = f.notes?.stringValue || 'Nalangin Item';
-        const shortId = f.shortId?.stringValue || 'ID000';
+        const docId = targetDoc.name.split('/').pop();
+        const shortId = f.shortId?.stringValue || docId.substring(0, 6).toUpperCase();
+        
+        let person = f.person?.stringValue || 'Friend';
+        let amt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
+        let notes = f.notes?.stringValue || f.title?.stringValue || 'Nalangin Item';
 
-        // Update Nalangin Status to Settled via PATCH
-        const updateUrl = `https://firestore.googleapis.com/v1/${targetDoc.name}${apiKeyParam}&updateMask.fieldPaths=status&updateMask.fieldPaths=settledAt`;
-        await fetch(updateUrl, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fields: {
-              status: { stringValue: 'settled' },
-              settledAt: { integerValue: String(Date.now()) }
-            }
-          })
-        });
+        if (isFallbackExpense) {
+          const personMatch = notes.match(/\[(?:Tagihan|Hutang)\]\s*([^:]+):/i);
+          if (personMatch) person = personMatch[1].trim();
+          notes = notes.replace(/\[(?:Tagihan|Hutang)\]\s*[^:]+:\s*/i, '');
 
-        if (isTagihan) {
-          // Log expense entry under Bank Jago (Joint)
-          await fetch(expensesUrl, {
-            method: 'POST',
+          // Update Fallback Expense Document in Firestore
+          const updateUrl = `https://firestore.googleapis.com/v1/${targetDoc.name}?key=${FIREBASE_API_KEY}&updateMask.fieldPaths=subCategory&updateMask.fieldPaths=title`;
+          await fetch(updateUrl, {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               fields: {
-                title: { stringValue: `${notes} (${person})` },
-                amount: { doubleValue: amt },
-                quantity: { integerValue: '1' },
-                unitPrice: { doubleValue: amt },
-                category: { stringValue: 'food' },
-                subCategory: { stringValue: 'resto_dining' },
-                date: { stringValue: new Date().toISOString().split('T')[0] },
-                paymentMethod: { stringValue: 'qris' },
-                paymentAccountId: { stringValue: 'acc_jago' },
-                createdBy: { stringValue: `telegram_${chatId}` },
-                createdAt: { integerValue: String(Date.now()) },
-                updatedAt: { integerValue: String(Date.now()) }
+                ...f,
+                title: { stringValue: `[Settled ${isTagihan ? 'Tagihan' : 'Hutang'}] ${person}: ${notes}` },
+                subCategory: { stringValue: 'settled_nalangin' }
               }
             })
           });
+        } else {
+          // Update Nalangin Ledger Document Status
+          const updateUrl = `https://firestore.googleapis.com/v1/${targetDoc.name}?key=${FIREBASE_API_KEY}&updateMask.fieldPaths=status&updateMask.fieldPaths=settledAt`;
+          await fetch(updateUrl, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fields: {
+                status: { stringValue: 'settled' },
+                settledAt: { integerValue: String(Date.now()) }
+              }
+            })
+          });
+        }
 
-          await sendBotMessage(chatId, `✅ *Receivable Settled!* [${shortId}] *${person}* paid Rp ${amt.toLocaleString('id-ID')} ('${notes}'). Recorded as expense under Bank Jago.`, TELEGRAM_BOT_TOKEN);
+        if (isTagihan) {
+          await sendBotMessage(chatId, `✅ *Receivable Settled!* [${shortId}] *${person}* paid Rp ${amt.toLocaleString('id-ID')} ('${notes}'). Recorded under Bank Jago.`, TELEGRAM_BOT_TOKEN);
         } else {
           await sendBotMessage(chatId, `✅ *Payable Settled!* [${shortId}] Paid Rp ${amt.toLocaleString('id-ID')} to *${person}* from Bank Jago.`, TELEGRAM_BOT_TOKEN);
         }
 
-        return res.status(200).json({ status: 'nalangin_settled' });
+        return res.status(200).json({ status: 'nalangin_settled', shortId });
       } else {
         await sendBotMessage(chatId, '⚠️ Could not find matching pending nalangin item to settle.', TELEGRAM_BOT_TOKEN);
         return res.status(200).json({ status: 'nalangin_settle_failed' });
