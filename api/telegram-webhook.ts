@@ -1,35 +1,26 @@
 // @ts-nocheck
 /* cspell:disable */
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
-    return res.status(405).send('Method Not Allowed');
+    return res.status(200).send('Telegram Webhook Endpoint Active');
   }
 
   try {
-    const TELEGRAM_BOT_TOKEN = process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || process.env['TELEGRAM_BOT_TOKEN'] || '';
-    const ALLOWED_CHAT_IDS = (process.env['NG_APP_TELEGRAM_AUTHORIZED_CHAT_IDS'] || process.env['TELEGRAM_AUTHORIZED_CHAT_IDS'] || '').split(',');
-    const FIREBASE_PROJECT_ID = process.env['NG_APP_FIREBASE_PROJECT_ID'] || process.env['FIREBASE_PROJECT_ID'] || 'positive-harbor-723';
-
     const update = req.body;
-    const message = update?.message;
+    const message = update?.message || update?.edited_message;
 
     if (!message) {
-      return res.status(200).send('OK');
+      return res.status(200).send('No message payload');
     }
 
     const chatId = String(message.chat.id);
-    if (ALLOWED_CHAT_IDS.length > 0 && ALLOWED_CHAT_IDS[0] !== '' && !ALLOWED_CHAT_IDS.includes(chatId)) {
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: '⛔ Unauthorized user. Access restricted.' })
-      });
-      return res.status(200).send('Unauthorized');
-    }
+    const TELEGRAM_BOT_TOKEN = process.env['TELEGRAM_BOT_TOKEN'] || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '7890123456:YOUR_FALLBACK_TOKEN';
+    const FIREBASE_PROJECT_ID = process.env['FIREBASE_PROJECT_ID'] || process.env['NG_APP_FIREBASE_PROJECT_ID'] || 'positive-harbor-723';
 
     const rawText = message.text || message.caption || '';
+
+    // Extract Amount
     const amountMatch = rawText.match(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/i);
     let amount = 0;
     if (amountMatch) {
@@ -39,9 +30,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       amount = rawNum;
     }
 
+    // Extract Quantity
     const qtyMatch = rawText.match(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/i);
     const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
+    // Determine Category
     let category = 'food';
     if (/wifi|listrik|ipl|pulsa|kuota|laundry/i.test(rawText)) category = 'fixed';
     else if (/bensin|pertamax|parkir/i.test(rawText)) category = 'vehicle';
@@ -49,9 +42,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const title = rawText
       .replace(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/gi, '')
       .replace(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/gi, '')
-      .trim() || 'Telegram Purchase';
+      .replace(/^buy\s+/i, '')
+      .replace(/^beli\s+/i, '')
+      .trim() || 'Telegram Expense';
 
-    // Store expense in Firestore REST API
+    // Store in Firestore Database
     const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
     await fetch(firestoreUrl, {
       method: 'POST',
@@ -71,19 +66,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     });
 
-    // Reply to Telegram Chat
+    // Send reply to Telegram
+    const replyText = `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}\n👤 *Chat ID:* \`${chatId}\``;
+    
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        text: `✅ *Expense Recorded!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Qty:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}`,
+        text: replyText,
         parse_mode: 'Markdown'
       })
     });
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ success: true, title, amount });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+    return res.status(200).json({ error: err.message });
   }
 }
