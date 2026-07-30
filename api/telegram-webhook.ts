@@ -68,10 +68,14 @@ export default async function handler(req: any, res: any) {
     });
 
     // Send instant confirmation reply to Telegram
-    const replyText = `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}`;
+    const tokenToUse = TELEGRAM_BOT_TOKEN || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '';
 
-    if (TELEGRAM_BOT_TOKEN) {
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const replyText = tokenToUse 
+      ? `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}`
+      : `⚠️ *Token Missing in Vercel:* Please set TELEGRAM_BOT_TOKEN in Vercel Environment Variables.`;
+
+    if (tokenToUse) {
+      await fetch(`https://api.telegram.org/bot${tokenToUse}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -84,6 +88,18 @@ export default async function handler(req: any, res: any) {
 
     return res.status(200).json({ success: true, title, amount });
   } catch (err: any) {
+    // Send execution error directly back to Telegram for debugging
+    const tokenToUse = process.env['TELEGRAM_BOT_TOKEN'] || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '';
+    if (tokenToUse && req.body?.message?.chat?.id) {
+      await fetch(`https://api.telegram.org/bot${tokenToUse}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: String(req.body.message.chat.id),
+          text: `❌ *Webhook Error:* ${err.message}`
+        })
+      });
+    }
     return res.status(200).json({ error: err.message });
   }
 }
