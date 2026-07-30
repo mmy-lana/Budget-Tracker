@@ -15,7 +15,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const chatId = String(message.chat.id);
-    const TELEGRAM_BOT_TOKEN = process.env['TELEGRAM_BOT_TOKEN'] || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '7890123456:YOUR_FALLBACK_TOKEN';
+    const TELEGRAM_BOT_TOKEN = process.env['TELEGRAM_BOT_TOKEN'] || process.env['NG_APP_TELEGRAM_BOT_TOKEN'] || '';
     const FIREBASE_PROJECT_ID = process.env['FIREBASE_PROJECT_ID'] || process.env['NG_APP_FIREBASE_PROJECT_ID'] || 'positive-harbor-723';
 
     const rawText = message.text || message.caption || '';
@@ -34,7 +34,7 @@ export default async function handler(req: any, res: any) {
     const qtyMatch = rawText.match(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/i);
     const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-    // Determine Category
+    // Category Classification
     let category = 'food';
     if (/wifi|listrik|ipl|pulsa|kuota|laundry/i.test(rawText)) category = 'fixed';
     else if (/bensin|pertamax|parkir/i.test(rawText)) category = 'vehicle';
@@ -46,8 +46,9 @@ export default async function handler(req: any, res: any) {
       .replace(/^beli\s+/i, '')
       .trim() || 'Telegram Expense';
 
-    // Store in Firestore Database
+    // Store in Firestore Database REST API
     const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
+    
     await fetch(firestoreUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -66,18 +67,20 @@ export default async function handler(req: any, res: any) {
       })
     });
 
-    // Send reply to Telegram
-    const replyText = `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}\n👤 *Chat ID:* \`${chatId}\``;
-    
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: replyText,
-        parse_mode: 'Markdown'
-      })
-    });
+    // Send instant confirmation reply to Telegram
+    const replyText = `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}`;
+
+    if (TELEGRAM_BOT_TOKEN) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: replyText,
+          parse_mode: 'Markdown'
+        })
+      });
+    }
 
     return res.status(200).json({ success: true, title, amount });
   } catch (err: any) {
