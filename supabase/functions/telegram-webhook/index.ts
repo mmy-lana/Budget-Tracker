@@ -43,7 +43,26 @@ serve(async (req: Request) => {
     }
 
     const rawText = message.text || message.caption || "";
+    const isCancellation = /^(cancel|batal|no|discard|hapus)/i.test(rawText);
     const isConfirmation = /^(yes|ya|yep|confirm|correct|setuju)/i.test(rawText) || /correct for ID\d+/i.test(rawText);
+
+    if (isCancellation) {
+      const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
+      const pRes = await fetch(pendingUrl);
+      const pData = await pRes.json();
+
+      if (pData.documents && pData.documents.length > 0) {
+        for (const doc of pData.documents) {
+          if (doc.fields?.chatId?.stringValue === chatId) {
+            await fetch(`https://firestore.googleapis.com/v1/${doc.name}`, { method: 'DELETE' });
+            break;
+          }
+        }
+      }
+
+      await sendTelegramMessage(chatId, "❌ *Pending entry cancelled.* Send a new expense description whenever you're ready.");
+      return new Response("Cancelled", { status: 200 });
+    }
 
     if (isConfirmation) {
       const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
@@ -91,7 +110,7 @@ serve(async (req: Request) => {
 
         await fetch(`https://firestore.googleapis.com/v1/${matchedDoc.name}`, { method: 'DELETE' });
 
-        await sendTelegramMessage(chatId, `✅ *Expense Recorded!* [${pendingId}]\n📌 *Item:* ${title}\n💰 *Total:* Rp ${amount.toLocaleString("id-ID")}`);
+        await sendTelegramMessage(chatId, `✅ *Expense Recorded!* [${pendingId}]\n📌 *Item:* ${title}\n📦 *Qty:* ${quantity}\n💰 *Price:* Rp ${unitPrice.toLocaleString("id-ID")}\n💵 *Total:* Rp ${amount.toLocaleString("id-ID")}`);
         return new Response(JSON.stringify({ success: true, confirmed: true }), { status: 200 });
       } else {
         await sendTelegramMessage(chatId, "⚠️ No pending expense found to confirm.");
@@ -101,7 +120,7 @@ serve(async (req: Request) => {
 
     const parsedExpense = parseExpenseText(rawText);
     if (parsedExpense.amount <= 0) {
-      await sendTelegramMessage(chatId, "❓ Could not detect expense amount. Example: *Pecel ayam 2 total 50rb*");
+      await sendTelegramMessage(chatId, "❓ Could not detect expense amount. Example: *Pecel ayam 2 total 50rb* or *Pecel ayam 2, 50k*");
       return new Response("Ignored invalid expense", { status: 200 });
     }
 

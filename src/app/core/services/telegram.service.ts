@@ -9,19 +9,60 @@ export class TelegramService {
 
   parseTextToExpense(text: string, chatId: string = 'manual'): TelegramExpensePayload {
     const clean = text.toLowerCase();
-    
-    const amountMatch = clean.match(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/i);
-    let amount = 0;
-    if (amountMatch) {
-      let rawNum = parseFloat(amountMatch[1].replace(/\./g, ''));
-      const unit = (amountMatch[2] || '').toLowerCase();
-      if (unit === 'rb' || unit === 'k') rawNum *= 1000;
-      amount = rawNum;
+
+    let totalAmount = 0;
+    let quantity = 1;
+    let amountMatchString = '';
+
+    const explicitAmountRegex = /(?:rp\.?\s*|total\s*)?(\d+[\d\.]*)\s*(rb|k|ribu|rupiah|idr)\b|(?:rp\.?\s*|total\s+)(\d+[\d\.]*)\b/gi;
+    let amtMatch = explicitAmountRegex.exec(clean);
+
+    if (amtMatch) {
+      amountMatchString = amtMatch[0];
+      let numStr = (amtMatch[1] || amtMatch[3]).replace(/\./g, '');
+      let num = parseFloat(numStr);
+      let unit = (amtMatch[2] || '').toLowerCase();
+      if (unit === 'rb' || unit === 'k' || unit === 'ribu') num *= 1000;
+      totalAmount = num;
+    } else {
+      const numRegex = /(\d+[\d\.]*)/g;
+      const numMatches = [];
+      let m;
+      while ((m = numRegex.exec(clean)) !== null) {
+        const val = parseFloat(m[1].replace(/\./g, ''));
+        numMatches.push({ raw: m[0], val, index: m.index });
+      }
+      if (numMatches.length > 0) {
+        const candidate = numMatches.reduce((max, cur) => cur.val > max.val ? cur : max, numMatches[0]);
+        if (candidate.val >= 100) {
+          totalAmount = candidate.val;
+          amountMatchString = candidate.raw;
+        }
+      }
     }
 
-    const qtyMatch = clean.match(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/i);
-    const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
-    const unitPrice = quantity > 0 ? amount / quantity : amount;
+    let remainingText = text;
+    if (amountMatchString) {
+      remainingText = remainingText.replace(new RegExp(amountMatchString.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), ' ');
+    }
+
+    const qtyRegex = /(?:for|qty|jumlah|x)?\s*(\d+)\s*(pcs|pack|botol|porsi|buah|ikat|cups|x)?/i;
+    const qtyMatch = remainingText.match(qtyRegex);
+    let qtyMatchString = '';
+
+    if (qtyMatch) {
+      const qVal = parseInt(qtyMatch[1], 10);
+      if (qVal > 0 && qVal < 100 && qVal !== totalAmount) {
+        quantity = qVal;
+        qtyMatchString = qtyMatch[0];
+      }
+    }
+
+    if (qtyMatchString) {
+      remainingText = remainingText.replace(qtyMatchString, ' ');
+    }
+
+    const unitPrice = quantity > 0 ? totalAmount / quantity : totalAmount;
 
     let category: ExpenseCategory = 'food';
     let subCategory: ExpenseSubCategory = 'resto_dining';
@@ -43,23 +84,25 @@ export class TelegramService {
       subCategory = 'movies_theater';
     }
 
-    const parsedTitle = text
-      .replace(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/gi, '')
-      .replace(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/gi, '')
+    const parsedTitle = remainingText
+      .replace(/^(buy|beli)\s+/i, '')
+      .replace(/total/gi, '')
+      .replace(/[,;:\-_]/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim() || 'Purchased Item';
 
     return {
       pendingId: `ID${Math.floor(100 + Math.random() * 900)}`,
       rawMessage: text,
       parsedTitle,
-      parsedAmount: amount,
+      parsedAmount: totalAmount,
       parsedQuantity: quantity,
       parsedUnitPrice: unitPrice,
       parsedCategory: category,
       parsedSubCategory: subCategory,
       date: new Date().toISOString().split('T')[0],
       chatId,
-      confidenceScore: amount > 0 ? 0.95 : 0.4
+      confidenceScore: totalAmount > 0 ? 0.95 : 0.4
     };
   }
 }

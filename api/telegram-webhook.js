@@ -53,7 +53,33 @@ module.exports = async (req, res) => {
       return res.status(200).json({ status: 'command_handled' });
     }
 
+    const isCancellation = /^(cancel|batal|no|discard|hapus)/i.test(rawText);
     const isConfirmation = /^(yes|ya|yep|confirm|correct|setuju)/i.test(rawText) || /correct for ID\d+/i.test(rawText);
+
+    // Cancel Pending Entry
+    if (isCancellation) {
+      const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
+      const pRes = await fetch(pendingUrl);
+      const pData = await pRes.json();
+
+      if (pData.documents && pData.documents.length > 0) {
+        for (const doc of pData.documents) {
+          if (doc.fields?.chatId?.stringValue === chatId) {
+            await fetch(`https://firestore.googleapis.com/v1/${doc.name}`, { method: 'DELETE' });
+            break;
+          }
+        }
+      }
+
+      if (TELEGRAM_BOT_TOKEN) {
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: '❌ *Pending entry cancelled.* Send a new expense description whenever you\'re ready.', parse_mode: 'Markdown' })
+        });
+      }
+      return res.status(200).json({ status: 'cancelled' });
+    }
 
     // Rule 2: 2-Step Interactive Text Parsing - Confirmation Step
     if (isConfirmation) {
@@ -129,14 +155,38 @@ module.exports = async (req, res) => {
       }
     }
 
-    // New Expense Parsing & Prompt Confirmation Creation
-    const amountMatch = rawText.match(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/i);
+    // Robust Amount & Quantity Parsing
     let totalAmount = 0;
-    if (amountMatch) {
-      let rawNum = parseFloat(amountMatch[1].replace(/\./g, ''));
-      const unit = (amountMatch[2] || '').toLowerCase();
-      if (unit === 'rb' || unit === 'k') rawNum *= 1000;
-      totalAmount = rawNum;
+    let quantity = 1;
+    let amountMatchString = '';
+
+    // Priority 1: Match numbers with explicit currency units (50k, 50rb, 50000 rupiah, total 50k, rp 50.000)
+    const explicitAmountRegex = /(?:rp\.?\s*|total\s*)?(\d+[\d\.]*)\s*(rb|k|ribu|rupiah|idr)\b|(?:rp\.?\s*|total\s+)(\d+[\d\.]*)\b/gi;
+    let amtMatch = explicitAmountRegex.exec(rawText);
+
+    if (amtMatch) {
+      amountMatchString = amtMatch[0];
+      let numStr = (amtMatch[1] || amtMatch[3]).replace(/\./g, '');
+      let num = parseFloat(numStr);
+      let unit = (amtMatch[2] || '').toLowerCase();
+      if (unit === 'rb' || unit === 'k' || unit === 'ribu') num *= 1000;
+      totalAmount = num;
+    } else {
+      // Fallback: Standalone numbers >= 100 or largest number
+      const numRegex = /(\d+[\d\.]*)/g;
+      const numMatches = [];
+      let m;
+      while ((m = numRegex.exec(rawText)) !== null) {
+        const val = parseFloat(m[1].replace(/\./g, ''));
+        numMatches.push({ raw: m[0], val, index: m.index });
+      }
+      if (numMatches.length > 0) {
+        const candidate = numMatches.reduce((max, cur) => cur.val > max.val ? cur : max, numMatches[0]);
+        if (candidate.val >= 100) {
+          totalAmount = candidate.val;
+          amountMatchString = candidate.raw;
+        }
+      }
     }
 
     if (totalAmount <= 0) {
@@ -144,17 +194,32 @@ module.exports = async (req, res) => {
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: '❓ Could not detect expense amount. Example: `Pecel ayam 2 total 50rb`' })
+          body: JSON.stringify({ chat_id: chatId, text: '❓ Could not detect expense amount. Example: `Pecel ayam 2 total 50rb` or `Pecel ayam 2, 50k`', parse_mode: 'Markdown' })
         });
       }
       return res.status(200).json({ status: 'invalid_amount' });
     }
 
-    let quantity = 1;
-    const qtyMatch = rawText.match(/(\d+)\s*(pcs|pack|botol|porsi|buah|ikat|cups)?/i) || rawText.match(/(total|qty|jumlah)\s+(\d+)/i);
+    // Remove amount string from text before parsing quantity
+    let remainingText = rawText;
+    if (amountMatchString) {
+      remainingText = remainingText.replace(amountMatchString, ' ');
+    }
+
+    const qtyRegex = /(?:for|qty|jumlah|x)?\s*(\d+)\s*(pcs|pack|botol|porsi|buah|ikat|cups|x)?/i;
+    const qtyMatch = remainingText.match(qtyRegex);
+    let qtyMatchString = '';
+
     if (qtyMatch) {
-      const qVal = parseInt(qtyMatch[1] || qtyMatch[2], 10);
-      if (qVal > 0 && qVal < 100) quantity = qVal;
+      const qVal = parseInt(qtyMatch[1], 10);
+      if (qVal > 0 && qVal < 100 && qVal !== totalAmount) {
+        quantity = qVal;
+        qtyMatchString = qtyMatch[0];
+      }
+    }
+
+    if (qtyMatchString) {
+      remainingText = remainingText.replace(qtyMatchString, ' ');
     }
 
     const unitPrice = totalAmount / quantity;
@@ -169,10 +234,11 @@ module.exports = async (req, res) => {
     else if (/bensin|pertamax|parkir/i.test(rawText)) { category = 'vehicle'; subCategory = 'vehicle'; }
     else if (/wifi|listrik|ipl|pulsa/i.test(rawText)) { category = 'fixed'; subCategory = 'fixed'; }
 
-    const title = rawText
-      .replace(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/gi, '')
-      .replace(/total|qty|jumlah/gi, '')
-      .replace(/(\d+)\s*(pcs|pack|botol|porsi|buah|ikat|cups)?/gi, '')
+    const title = remainingText
+      .replace(/^(buy|beli)\s+/i, '')
+      .replace(/total/gi, '')
+      .replace(/[,;:\-_]/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim() || 'Purchased Item';
 
     const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
