@@ -205,7 +205,7 @@ module.exports = async (req, res) => {
           body: JSON.stringify({
             fields: {
               status: { stringValue: 'settled' },
-              settledAt: { integerValue: Date.now() }
+              settledAt: { integerValue: String(Date.now()) }
             }
           })
         });
@@ -219,7 +219,7 @@ module.exports = async (req, res) => {
               fields: {
                 title: { stringValue: `${notes} (${person})` },
                 amount: { doubleValue: amt },
-                quantity: { integerValue: 1 },
+                quantity: { integerValue: '1' },
                 unitPrice: { doubleValue: amt },
                 category: { stringValue: 'food' },
                 subCategory: { stringValue: 'resto_dining' },
@@ -227,8 +227,8 @@ module.exports = async (req, res) => {
                 paymentMethod: { stringValue: 'qris' },
                 paymentAccountId: { stringValue: 'acc_jago' },
                 createdBy: { stringValue: `telegram_${chatId}` },
-                createdAt: { integerValue: Date.now() },
-                updatedAt: { integerValue: Date.now() }
+                createdAt: { integerValue: String(Date.now()) },
+                updatedAt: { integerValue: String(Date.now()) }
               }
             })
           });
@@ -273,7 +273,7 @@ module.exports = async (req, res) => {
       const notes = remainingParts.slice(1).join(' ') || 'Shared Purchase';
       const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
 
-      await fetch(nalanginUrl, {
+      const postRes = await fetch(nalanginUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -285,10 +285,17 @@ module.exports = async (req, res) => {
             date: { stringValue: new Date().toISOString().split('T')[0] },
             notes: { stringValue: notes },
             status: { stringValue: 'pending' },
-            createdAt: { integerValue: Date.now() }
+            createdAt: { integerValue: String(Date.now()) }
           }
         })
       });
+
+      if (!postRes.ok) {
+        const errText = await postRes.text();
+        console.error('Firestore Nalangin POST Error:', errText);
+        await sendBotMessage(chatId, `⚠️ Failed to save to database. Error ${postRes.status}`, TELEGRAM_BOT_TOKEN);
+        return res.status(200).json({ error: errText });
+      }
 
       if (isTagihan) {
         await sendBotMessage(chatId, `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString('id-ID')} for '${notes}'.\n_(Saved directly to Nalangin Ledger - no confirmation needed)_`, TELEGRAM_BOT_TOKEN);
@@ -352,15 +359,15 @@ module.exports = async (req, res) => {
             fields: {
               title: { stringValue: title },
               amount: { doubleValue: totalAmount },
-              quantity: { integerValue: quantity },
+              quantity: { integerValue: String(quantity) },
               unitPrice: { doubleValue: unitPrice },
               category: { stringValue: category },
               subCategory: { stringValue: subCategory },
               date: { stringValue: new Date().toISOString().split('T')[0] },
               paymentMethod: { stringValue: 'qris' },
               createdBy: { stringValue: `telegram_${chatId}` },
-              createdAt: { integerValue: Date.now() },
-              updatedAt: { integerValue: Date.now() }
+              createdAt: { integerValue: String(Date.now()) },
+              updatedAt: { integerValue: String(Date.now()) }
             }
           })
         });
@@ -504,12 +511,12 @@ module.exports = async (req, res) => {
           pendingId: { stringValue: shortId },
           chatId: { stringValue: chatId },
           title: { stringValue: title },
-          quantity: { integerValue: quantity },
+          quantity: { integerValue: String(quantity) },
           unitPrice: { doubleValue: unitPrice },
           totalAmount: { doubleValue: totalAmount },
           category: { stringValue: category },
           subCategory: { stringValue: subCategory },
-          createdAt: { integerValue: Date.now() }
+          createdAt: { integerValue: String(Date.now()) }
         }
       })
     });

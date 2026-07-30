@@ -72,9 +72,15 @@ export class ExpenseService {
         if (!snapshot.empty) {
           const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as NalanginLedger));
           this.nalanginList.set(items);
+        } else {
+          this.nalanginList.set([]);
         }
-      }, () => {});
-    } catch (e) {}
+      }, () => {
+        this.nalanginList.set([]);
+      });
+    } catch (e) {
+      this.nalanginList.set([]);
+    }
   }
 
   private listenToSavingsTargets(): void {

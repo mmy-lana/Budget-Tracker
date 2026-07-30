@@ -150,7 +150,7 @@ serve(async (req: Request) => {
       const notes = remainingParts.slice(1).join(" ") || "Shared Purchase";
       const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
 
-      await fetch(nalanginUrl, {
+      const postRes = await fetch(nalanginUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -162,10 +162,17 @@ serve(async (req: Request) => {
             date: { stringValue: new Date().toISOString().split('T')[0] },
             notes: { stringValue: notes },
             status: { stringValue: "pending" },
-            createdAt: { integerValue: Date.now() }
+            createdAt: { integerValue: String(Date.now()) }
           }
         })
       });
+
+      if (!postRes.ok) {
+        const errText = await postRes.text();
+        console.error("Firestore Nalangin POST Error:", errText);
+        await sendTelegramMessage(chatId, `⚠️ Failed to save to database. Error ${postRes.status}`);
+        return new Response(errText, { status: 500 });
+      }
 
       const msg = isTagihan 
         ? `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString("id-ID")} for '${notes}'.\n_(Saved directly to Nalangin Ledger - no confirmation needed)_`
