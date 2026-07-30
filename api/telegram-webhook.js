@@ -1,11 +1,8 @@
-// @ts-nocheck
-/* cspell:disable */
-
-export default async function handler(req: any, res: any) {
+module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.method === 'GET') {
-    return res.status(200).json({ status: 'active', message: 'Telegram Webhook Endpoint Ready' });
+    return res.status(200).json({ status: 'active', message: 'Telegram Webhook Live' });
   }
 
   if (req.method !== 'POST') {
@@ -17,7 +14,7 @@ export default async function handler(req: any, res: any) {
     const message = update.message || update.edited_message;
 
     if (!message) {
-      return res.status(200).json({ status: 'ok', detail: 'No message in update payload' });
+      return res.status(200).json({ status: 'ok', detail: 'No message payload' });
     }
 
     const chatId = String(message.chat.id);
@@ -52,7 +49,7 @@ export default async function handler(req: any, res: any) {
       .replace(/^beli\s+/i, '')
       .trim() || 'Telegram Expense';
 
-    // Store in Firestore Database
+    // Store in Firestore Database via REST
     if (FIREBASE_PROJECT_ID) {
       const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
       await fetch(firestoreUrl, {
@@ -71,13 +68,12 @@ export default async function handler(req: any, res: any) {
             updatedAt: { integerValue: Date.now() }
           }
         })
-      }).catch((e) => console.error('Firestore REST Write Warning:', e));
+      });
     }
 
-    // Send Telegram Reply
+    // Reply to Telegram Chat
     if (TELEGRAM_BOT_TOKEN) {
       const replyText = `✅ *Expense Recorded to Website!*\n\n📌 *Item:* ${title}\n💰 *Amount:* Rp ${amount.toLocaleString('id-ID')}\n📦 *Quantity:* ${quantity}\n🏷️ *Category:* ${category.toUpperCase()}`;
-      
       await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -86,12 +82,11 @@ export default async function handler(req: any, res: any) {
           text: replyText,
           parse_mode: 'Markdown'
         })
-      }).catch((e) => console.error('Telegram SendMessage Warning:', e));
+      });
     }
 
     return res.status(200).json({ success: true, title, amount });
-  } catch (err: any) {
-    console.error('Webhook Invocation Error:', err);
+  } catch (err) {
     return res.status(200).json({ error: String(err) });
   }
-}
+};
