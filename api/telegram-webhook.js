@@ -20,6 +20,11 @@ module.exports = async (req, res) => {
     const chatId = String(message.chat.id);
     const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.NG_APP_TELEGRAM_BOT_TOKEN || '';
     const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.NG_APP_FIREBASE_PROJECT_ID || 'positive-harbor-723';
+    const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || process.env.NG_APP_FIREBASE_API_KEY || '';
+    const apiKeyParam = FIREBASE_API_KEY ? `?key=${FIREBASE_API_KEY}` : '';
+
+    const pendingDocUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram/${chatId}${apiKeyParam}`;
+    const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}`;
 
     // Rule 1: IGNORE raw image inputs (do not write 0 IDR entries to Firestore)
     if (message.photo && (!message.caption || message.caption.trim() === '')) {
@@ -58,18 +63,7 @@ module.exports = async (req, res) => {
 
     // Cancel Pending Entry
     if (isCancellation) {
-      const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
-      const pRes = await fetch(pendingUrl);
-      const pData = await pRes.json();
-
-      if (pData.documents && pData.documents.length > 0) {
-        for (const doc of pData.documents) {
-          if (doc.fields?.chatId?.stringValue === chatId) {
-            await fetch(`https://firestore.googleapis.com/v1/${doc.name}`, { method: 'DELETE' });
-            break;
-          }
-        }
-      }
+      await fetch(pendingDocUrl, { method: 'DELETE' });
 
       if (TELEGRAM_BOT_TOKEN) {
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -83,23 +77,11 @@ module.exports = async (req, res) => {
 
     // Rule 2: 2-Step Interactive Text Parsing - Confirmation Step
     if (isConfirmation) {
-      const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
-      const pRes = await fetch(pendingUrl);
-      const pData = await pRes.json();
+      const pRes = await fetch(pendingDocUrl);
 
-      let matchedDoc = null;
-      if (pData.documents && pData.documents.length > 0) {
-        for (const doc of pData.documents) {
-          const fields = doc.fields || {};
-          if (fields.chatId?.stringValue === chatId) {
-            matchedDoc = doc;
-            break;
-          }
-        }
-      }
-
-      if (matchedDoc) {
-        const fields = matchedDoc.fields;
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        const fields = pData.fields || {};
         const pendingId = fields.pendingId?.stringValue || 'ID000';
         const title = fields.title?.stringValue || 'Expense';
         const amount = Number(fields.totalAmount?.doubleValue || fields.totalAmount?.integerValue || 0);
@@ -108,8 +90,7 @@ module.exports = async (req, res) => {
         const category = fields.category?.stringValue || 'food';
         const subCategory = fields.subCategory?.stringValue || 'resto_dining';
 
-        // Write Parent Transaction & Line Item to Firestore
-        const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
+        // Write Parent Transaction to Firestore
         await fetch(expensesUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -131,7 +112,7 @@ module.exports = async (req, res) => {
         });
 
         // Delete pending document
-        await fetch(`https://firestore.googleapis.com/v1/${matchedDoc.name}`, { method: 'DELETE' });
+        await fetch(pendingDocUrl, { method: 'DELETE' });
 
         if (TELEGRAM_BOT_TOKEN) {
           const confirmMsg = `✅ *Expense Confirmed & Recorded!* [${pendingId}]\n\n📌 *Item:* ${title}\n📦 *Qty:* ${quantity}\n💰 *Price:* Rp ${unitPrice.toLocaleString('id-ID')}\n💵 *Total:* Rp ${amount.toLocaleString('id-ID')}`;
@@ -243,10 +224,9 @@ module.exports = async (req, res) => {
 
     const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
 
-    // Store in Pending Collection
-    const pendingStoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram`;
-    await fetch(pendingStoreUrl, {
-      method: 'POST',
+    // Store in Pending Collection (Direct Chat ID document key)
+    await fetch(pendingDocUrl, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         fields: {

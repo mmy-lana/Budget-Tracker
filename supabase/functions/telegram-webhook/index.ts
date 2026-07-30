@@ -46,48 +46,29 @@ serve(async (req: Request) => {
     const isCancellation = /^(cancel|batal|no|discard|hapus)/i.test(rawText);
     const isConfirmation = /^(yes|ya|yep|confirm|correct|setuju)/i.test(rawText) || /correct for ID\d+/i.test(rawText);
 
+    const FIREBASE_API_KEY = Deno.env.get("FIREBASE_API_KEY") || Deno.env.get("NG_APP_FIREBASE_API_KEY") || "";
+    const apiKeyParam = FIREBASE_API_KEY ? `?key=${FIREBASE_API_KEY}` : "";
+    const pendingDocUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram/${chatId}${apiKeyParam}`;
+    const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}`;
+
     if (isCancellation) {
-      const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
-      const pRes = await fetch(pendingUrl);
-      const pData = await pRes.json();
-
-      if (pData.documents && pData.documents.length > 0) {
-        for (const doc of pData.documents) {
-          if (doc.fields?.chatId?.stringValue === chatId) {
-            await fetch(`https://firestore.googleapis.com/v1/${doc.name}`, { method: 'DELETE' });
-            break;
-          }
-        }
-      }
-
+      await fetch(pendingDocUrl, { method: 'DELETE' });
       await sendTelegramMessage(chatId, "❌ *Pending entry cancelled.* Send a new expense description whenever you're ready.");
       return new Response("Cancelled", { status: 200 });
     }
 
     if (isConfirmation) {
-      const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
-      const pRes = await fetch(pendingUrl);
-      const pData = await pRes.json();
+      const pRes = await fetch(pendingDocUrl);
 
-      let matchedDoc = null;
-      if (pData.documents && pData.documents.length > 0) {
-        for (const doc of pData.documents) {
-          if (doc.fields?.chatId?.stringValue === chatId) {
-            matchedDoc = doc;
-            break;
-          }
-        }
-      }
-
-      if (matchedDoc) {
-        const fields = matchedDoc.fields;
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        const fields = pData.fields || {};
         const pendingId = fields.pendingId?.stringValue || 'ID000';
         const title = fields.title?.stringValue || 'Expense';
         const amount = Number(fields.totalAmount?.doubleValue || fields.totalAmount?.integerValue || 0);
         const quantity = Number(fields.quantity?.integerValue || 1);
         const unitPrice = Number(fields.unitPrice?.doubleValue || fields.unitPrice?.integerValue || amount);
 
-        const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
         await fetch(expensesUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -108,7 +89,7 @@ serve(async (req: Request) => {
           })
         });
 
-        await fetch(`https://firestore.googleapis.com/v1/${matchedDoc.name}`, { method: 'DELETE' });
+        await fetch(pendingDocUrl, { method: 'DELETE' });
 
         await sendTelegramMessage(chatId, `✅ *Expense Recorded!* [${pendingId}]\n📌 *Item:* ${title}\n📦 *Qty:* ${quantity}\n💰 *Price:* Rp ${unitPrice.toLocaleString("id-ID")}\n💵 *Total:* Rp ${amount.toLocaleString("id-ID")}`);
         return new Response(JSON.stringify({ success: true, confirmed: true }), { status: 200 });
@@ -125,9 +106,8 @@ serve(async (req: Request) => {
     }
 
     const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
-    const pendingStoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram`;
-    await fetch(pendingStoreUrl, {
-      method: "POST",
+    await fetch(pendingDocUrl, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         fields: {
