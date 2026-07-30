@@ -31,72 +31,104 @@ serve(async (req: Request) => {
     }
 
     const chatId = String(message.chat.id);
-    if (ALLOWED_CHAT_IDS.length > 0 && !ALLOWED_CHAT_IDS.includes(chatId)) {
+    if (ALLOWED_CHAT_IDS.length > 0 && ALLOWED_CHAT_IDS[0] !== "" && !ALLOWED_CHAT_IDS.includes(chatId)) {
       await sendTelegramMessage(chatId, "⛔ Unauthorized user. Access restricted.");
       return new Response("Unauthorized", { status: 200 });
     }
 
-    const rawText = message.text || message.caption || "";
-    let photoFileId = "";
+    // Rule 1: IGNORE raw image inputs (do not write 0 IDR entries)
+    if (message.photo && (!message.caption || message.caption.trim() === "")) {
+      await sendTelegramMessage(chatId, "📷 Image received. Please send text description with price to log expense.");
+      return new Response("Image ignored without text", { status: 200 });
+    }
 
-    if (message.photo && message.photo.length > 0) {
-      const largestPhoto = message.photo.reduce((prev, curr) => 
-        (curr.file_size > prev.file_size) ? curr : prev
-      );
-      photoFileId = largestPhoto.file_id;
+    const rawText = message.text || message.caption || "";
+    const isConfirmation = /^(yes|ya|yep|confirm|correct|setuju)/i.test(rawText) || /correct for ID\d+/i.test(rawText);
+
+    if (isConfirmation) {
+      const pendingUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?pageSize=10`;
+      const pRes = await fetch(pendingUrl);
+      const pData = await pRes.json();
+
+      let matchedDoc = null;
+      if (pData.documents && pData.documents.length > 0) {
+        for (const doc of pData.documents) {
+          if (doc.fields?.chatId?.stringValue === chatId) {
+            matchedDoc = doc;
+            break;
+          }
+        }
+      }
+
+      if (matchedDoc) {
+        const fields = matchedDoc.fields;
+        const pendingId = fields.pendingId?.stringValue || 'ID000';
+        const title = fields.title?.stringValue || 'Expense';
+        const amount = Number(fields.totalAmount?.doubleValue || fields.totalAmount?.integerValue || 0);
+        const quantity = Number(fields.quantity?.integerValue || 1);
+        const unitPrice = Number(fields.unitPrice?.doubleValue || fields.unitPrice?.integerValue || amount);
+
+        const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
+        await fetch(expensesUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fields: {
+              title: { stringValue: title },
+              amount: { doubleValue: amount },
+              quantity: { integerValue: quantity },
+              unitPrice: { doubleValue: unitPrice },
+              category: { stringValue: fields.category?.stringValue || "food" },
+              subCategory: { stringValue: fields.subCategory?.stringValue || "resto_dining" },
+              date: { stringValue: new Date().toISOString().split('T')[0] },
+              paymentMethod: { stringValue: "qris" },
+              createdBy: { stringValue: `telegram_${chatId}` },
+              createdAt: { integerValue: Date.now() },
+              updatedAt: { integerValue: Date.now() }
+            }
+          })
+        });
+
+        await fetch(`https://firestore.googleapis.com/v1/${matchedDoc.name}`, { method: 'DELETE' });
+
+        await sendTelegramMessage(chatId, `✅ *Expense Recorded!* [${pendingId}]\n📌 *Item:* ${title}\n💰 *Total:* Rp ${amount.toLocaleString("id-ID")}`);
+        return new Response(JSON.stringify({ success: true, confirmed: true }), { status: 200 });
+      } else {
+        await sendTelegramMessage(chatId, "⚠️ No pending expense found to confirm.");
+        return new Response("No pending entry", { status: 200 });
+      }
     }
 
     const parsedExpense = parseExpenseText(rawText);
-
-    if (parsedExpense.amount <= 0 && !photoFileId) {
-      await sendTelegramMessage(
-        chatId, 
-        "❓ Could not detect expense amount. Example: *buy coffee 25000 for 2 cups*"
-      );
+    if (parsedExpense.amount <= 0) {
+      await sendTelegramMessage(chatId, "❓ Could not detect expense amount. Example: *Pecel ayam 2 total 50rb*");
       return new Response("Ignored invalid expense", { status: 200 });
     }
 
-    const record = {
-      title: parsedExpense.title || "Telegram Purchase",
-      amount: parsedExpense.amount,
-      quantity: parsedExpense.quantity,
-      category: parsedExpense.category,
-      date: new Date().toISOString().split('T')[0],
-      paymentMethod: "qris",
-      createdBy: `telegram_${chatId}`,
-      receiptImageUrl: photoFileId ? `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${photoFileId}` : "",
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-
-    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses`;
-    
-    await fetch(firestoreUrl, {
+    const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
+    const pendingStoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram`;
+    await fetch(pendingStoreUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         fields: {
-          title: { stringValue: record.title },
-          amount: { doubleValue: record.amount },
-          quantity: { integerValue: record.quantity },
-          category: { stringValue: record.category },
-          date: { stringValue: record.date },
-          paymentMethod: { stringValue: record.paymentMethod },
-          createdBy: { stringValue: record.createdBy },
-          receiptImageUrl: { stringValue: record.receiptImageUrl },
-          createdAt: { integerValue: record.createdAt },
-          updatedAt: { integerValue: record.updatedAt }
+          pendingId: { stringValue: shortId },
+          chatId: { stringValue: chatId },
+          title: { stringValue: parsedExpense.title },
+          quantity: { integerValue: parsedExpense.quantity },
+          unitPrice: { doubleValue: parsedExpense.unitPrice },
+          totalAmount: { doubleValue: parsedExpense.amount },
+          category: { stringValue: parsedExpense.category },
+          subCategory: { stringValue: parsedExpense.subCategory },
+          createdAt: { integerValue: Date.now() }
         }
       })
     });
 
-    const replyMsg = `✅ *Expense Recorded!*\n\n📌 *Item:* ${record.title}\n💰 *Amount:* Rp ${record.amount.toLocaleString("id-ID")}\n📦 *Qty:* ${record.quantity}\n🏷️ *Category:* ${record.category.toUpperCase()}`;
-    await sendTelegramMessage(chatId, replyMsg);
+    const promptMsg = `📌 [${shortId}] *Pending Entry:* '${parsedExpense.title}' | Qty: ${parsedExpense.quantity} | Price: Rp ${parsedExpense.unitPrice.toLocaleString('id-ID')} | Total: Rp ${parsedExpense.amount.toLocaleString('id-ID')}.\n\nReply *'correct for ${shortId}'* or *'yes'* to save.`;
+    await sendTelegramMessage(chatId, promptMsg);
 
-    return new Response(JSON.stringify({ success: true }), { 
-      headers: { "Content-Type": "application/json" },
-      status: 200 
-    });
+    return new Response(JSON.stringify({ success: true, pendingId: shortId }), { status: 200 });
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500 });
   }

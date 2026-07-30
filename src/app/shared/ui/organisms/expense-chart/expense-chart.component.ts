@@ -56,16 +56,15 @@ export class ExpenseChartComponent implements AfterViewInit {
     this.chart = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels: ['Fixed', 'Food', 'Daily', 'Savings', 'Bills', 'Vehicle', 'Other'],
+        labels: ['Food', 'Entertainment', 'Fixed', 'Vehicle', 'Utility', 'Other'],
         datasets: [{
-          data: [0, 0, 0, 0, 0, 0, 0],
+          data: [0, 0, 0, 0, 0, 0],
           backgroundColor: [
-            '#059669', // Emerald 600
             '#10b981', // Emerald 500
-            '#34d399', // Emerald 400
-            '#0284c7', // Sky 600
-            '#f59e0b', // Amber 500
+            '#f43f5e', // Rose 500
+            '#059669', // Emerald 600
             '#6366f1', // Indigo 500
+            '#f59e0b', // Amber 500
             '#94a3b8'  // Slate 400
           ],
           borderWidth: 2,
@@ -96,12 +95,11 @@ export class ExpenseChartComponent implements AfterViewInit {
   private updateChart(data: Record<ExpenseCategory, number>): void {
     if (!this.chart) return;
     const values = [
-      data.fixed || 0,
       data.food || 0,
-      data.daily || 0,
-      data.savings || 0,
-      data.bills || 0,
+      data.entertainment || 0,
+      data.fixed || 0,
       data.vehicle || 0,
+      data.utility || 0,
       data.other || 0
     ];
     this.chart.data.datasets[0].data = values;

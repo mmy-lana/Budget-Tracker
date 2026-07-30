@@ -4,15 +4,47 @@ import { ExpenseItem, ExpenseCategory } from '../../../../core/models/expense.mo
 import { CurrencyIdrPipe } from '../../../pipes/currency-idr.pipe';
 import { BadgeComponent } from '../../atoms/badge/badge.component';
 
+export type TimeframeFilter = 'daily' | 'weekly' | 'monthly' | 'last_month' | 'all';
+export type CategoryTab = 'all' | 'food' | 'fixed' | 'vehicle' | 'entertainment' | 'shared_nalangin';
+
 @Component({
   selector: 'app-data-table',
   standalone: true,
   imports: [CommonModule, CurrencyIdrPipe, BadgeComponent],
   template: `
-    <div class="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm overflow-hidden">
-      <!-- Search & Filters -->
-      <div class="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
-        <div class="relative flex-1 min-w-[200px]">
+    <div class="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm overflow-hidden space-y-3">
+      
+      <!-- Segmented Tab Filters (Category) -->
+      <div class="p-3 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 overflow-x-auto">
+        <div class="flex items-center gap-1.5">
+          @for (tab of categoryTabs; track tab.id) {
+            <button
+              (click)="activeTab.set(tab.id)"
+              [class]="activeTab() === tab.id 
+                ? 'bg-emerald-600 text-white font-semibold shadow-sm' 
+                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'"
+              class="px-3 py-1.5 text-xs rounded-xl transition-all whitespace-nowrap">
+              {{ tab.label }}
+            </button>
+          }
+        </div>
+
+        <!-- Timeframe View Filters -->
+        <div class="flex items-center gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+          @for (tf of timeframeFilters; track tf.id) {
+            <button
+              (click)="activeTimeframe.set(tf.id)"
+              [class]="activeTimeframe() === tf.id ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'"
+              class="px-2.5 py-1 text-[11px] rounded-lg transition-all whitespace-nowrap">
+              {{ tf.label }}
+            </button>
+          }
+        </div>
+      </div>
+
+      <!-- Search Field -->
+      <div class="px-4 flex items-center justify-between gap-3">
+        <div class="relative flex-1">
           <input 
             type="text"
             placeholder="Search expenses..."
@@ -23,16 +55,6 @@ import { BadgeComponent } from '../../atoms/badge/badge.component';
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
         </div>
-
-        <select 
-          (change)="onCategoryFilter($event)"
-          class="px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 outline-none focus:ring-2 focus:ring-emerald-500">
-          <option value="all">All Categories</option>
-          <option value="food">Food</option>
-          <option value="fixed">Fixed Expense</option>
-          <option value="daily">Daily</option>
-          <option value="vehicle">Vehicle</option>
-        </select>
       </div>
 
       <!-- Table -->
@@ -42,7 +64,7 @@ import { BadgeComponent } from '../../atoms/badge/badge.component';
             <tr>
               <th class="px-5 py-3.5">Date</th>
               <th class="px-5 py-3.5">Item</th>
-              <th class="px-5 py-3.5">Category</th>
+              <th class="px-5 py-3.5">Sub-Category</th>
               <th class="px-5 py-3.5">Qty</th>
               <th class="px-5 py-3.5 text-right">Amount</th>
               <th class="px-5 py-3.5 text-center">Receipt</th>
@@ -53,10 +75,15 @@ import { BadgeComponent } from '../../atoms/badge/badge.component';
             @for (item of filteredExpenses(); track item.id) {
               <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                 <td class="px-5 py-4 whitespace-nowrap text-xs text-slate-500">{{ item.date }}</td>
-                <td class="px-5 py-4 font-semibold text-slate-900 dark:text-white">{{ item.title }}</td>
+                <td class="px-5 py-4 font-semibold text-slate-900 dark:text-white">
+                  {{ item.title }}
+                  @if (item.storeName) {
+                    <span class="block text-[10px] text-slate-400 font-normal">📍 {{ item.storeName }}</span>
+                  }
+                </td>
                 <td class="px-5 py-4">
                   <app-badge [variant]="getCategoryBadgeVariant(item.category)">
-                    {{ item.category }}
+                    {{ item.subCategory || item.category }}
                   </app-badge>
                 </td>
                 <td class="px-5 py-4 text-xs font-medium">{{ item.quantity }}</td>
@@ -100,16 +127,48 @@ export class DataTableComponent {
   viewReceipt = output<string>();
 
   searchTerm = signal<string>('');
-  selectedCategory = signal<string>('all');
+  activeTab = signal<CategoryTab>('all');
+  activeTimeframe = signal<TimeframeFilter>('all');
+
+  categoryTabs: { id: CategoryTab; label: string }[] = [
+    { id: 'all', label: 'All Transactions' },
+    { id: 'food', label: '🥗 Food' },
+    { id: 'fixed', label: '⚡ Fixed' },
+    { id: 'vehicle', label: '🚗 Vehicle' },
+    { id: 'entertainment', label: '🎬 Entertainment' },
+    { id: 'shared_nalangin', label: '🤝 Shared/Nalangin' }
+  ];
+
+  timeframeFilters: { id: TimeframeFilter; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'daily', label: 'Daily' },
+    { id: 'weekly', label: 'Weekly' },
+    { id: 'monthly', label: 'Monthly' },
+    { id: 'last_month', label: 'Last Month' }
+  ];
 
   filteredExpenses = computed(() => {
     const term = this.searchTerm().toLowerCase();
-    const cat = this.selectedCategory();
+    const tab = this.activeTab();
+    const tf = this.activeTimeframe();
+    const today = new Date().toISOString().split('T')[0];
 
     return this.expenses().filter(item => {
       const matchesSearch = item.title.toLowerCase().includes(term);
-      const matchesCat = cat === 'all' || item.category === cat;
-      return matchesSearch && matchesCat;
+      let matchesTab = true;
+
+      if (tab === 'shared_nalangin') {
+        matchesTab = item.notes?.toLowerCase().includes('nalangin') || item.createdBy.includes('nalangin');
+      } else if (tab !== 'all') {
+        matchesTab = item.category === tab;
+      }
+
+      let matchesTf = true;
+      if (tf === 'daily') {
+        matchesTf = item.date === today;
+      }
+
+      return matchesSearch && matchesTab && matchesTf;
     });
   });
 
@@ -117,15 +176,12 @@ export class DataTableComponent {
     this.searchTerm.set((e.target as HTMLInputElement).value);
   }
 
-  onCategoryFilter(e: Event): void {
-    this.selectedCategory.set((e.target as HTMLSelectElement).value);
-  }
-
   getCategoryBadgeVariant(category: ExpenseCategory): any {
     switch (category) {
       case 'food': return 'emerald';
       case 'fixed': return 'warning';
       case 'vehicle': return 'info';
+      case 'entertainment': return 'danger';
       default: return 'neutral';
     }
   }
