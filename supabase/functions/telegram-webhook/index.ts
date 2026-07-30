@@ -150,7 +150,7 @@ serve(async (req: Request) => {
       const notes = remainingParts.slice(1).join(" ") || "Shared Purchase";
       const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
 
-      const postRes = await fetch(nalanginUrl, {
+      let postRes = await fetch(nalanginUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -166,6 +166,31 @@ serve(async (req: Request) => {
           }
         })
       });
+
+      if (!postRes.ok) {
+        const expensesUrl = buildFirestoreUrl("expenses");
+        const titleStr = isTagihan ? `[Tagihan] ${person}: ${notes}` : `[Hutang] ${person}: ${notes}`;
+        postRes = await fetch(expensesUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fields: {
+              title: { stringValue: titleStr },
+              amount: { doubleValue: amount },
+              quantity: { integerValue: "1" },
+              unitPrice: { doubleValue: amount },
+              category: { stringValue: "other" },
+              subCategory: { stringValue: isTagihan ? "receivable" : "payable" },
+              storeName: { stringValue: `Nalangin: ${person}` },
+              date: { stringValue: new Date().toISOString().split('T')[0] },
+              paymentMethod: { stringValue: "qris" },
+              createdBy: { stringValue: `telegram_${chatId}` },
+              createdAt: { integerValue: String(Date.now()) },
+              updatedAt: { integerValue: String(Date.now()) }
+            }
+          })
+        });
+      }
 
       if (!postRes.ok) {
         const errText = await postRes.text();

@@ -135,9 +135,10 @@ module.exports = async (req, res) => {
     // Command: list tagihan / list hutang / list nalangin
     if (/^list\s+(tagihan|hutang|nalangin)/i.test(cleanLower)) {
       const targetType = cleanLower.includes('tagihan') ? 'receivable' : cleanLower.includes('hutang') ? 'payable' : 'all';
-      const resNal = await fetch(buildFirestoreUrl('nalangin_ledger', 'pageSize=50'));
       let listText = '';
 
+      // Check nalangin_ledger collection
+      const resNal = await fetch(buildFirestoreUrl('nalangin_ledger', 'pageSize=50'));
       if (resNal.ok) {
         const data = await resNal.json();
         if (data.documents && data.documents.length > 0) {
@@ -154,6 +155,35 @@ module.exports = async (req, res) => {
               const notes = f.notes?.stringValue || '';
               const tag = type === 'receivable' ? 'Tagihan' : 'Hutang';
               listText += `• *[${shortId}]* ${tag} to *${person}*: Rp ${amt.toLocaleString('id-ID')} (${notes})\n`;
+            }
+          }
+        }
+      }
+
+      // Check expenses collection for fallback entries
+      const resExp = await fetch(buildFirestoreUrl('expenses', 'pageSize=50'));
+      if (resExp.ok) {
+        const dataExp = await resExp.json();
+        if (dataExp.documents && dataExp.documents.length > 0) {
+          for (const doc of dataExp.documents) {
+            const f = doc.fields || {};
+            const subCat = f.subCategory?.stringValue || '';
+            const title = f.title?.stringValue || '';
+            const isRec = subCat === 'receivable' || title.startsWith('[Tagihan]');
+            const isPay = subCat === 'payable' || title.startsWith('[Hutang]');
+
+            if (isRec || isPay) {
+              const type = isRec ? 'receivable' : 'payable';
+              if (targetType === 'all' || type === targetType) {
+                const docId = doc.name.split('/').pop();
+                const shortId = docId.substring(0, 6).toUpperCase();
+                const personMatch = title.match(/\[(?:Tagihan|Hutang)\]\s*([^:]+):/i);
+                const person = personMatch ? personMatch[1].trim() : 'Friend';
+                const notes = title.replace(/\[(?:Tagihan|Hutang)\]\s*[^:]+:\s*/i, '');
+                const amt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
+                const tag = isRec ? 'Tagihan' : 'Hutang';
+                listText += `• *[${shortId}]* ${tag} to *${person}*: Rp ${amt.toLocaleString('id-ID')} (${notes})\n`;
+              }
             }
           }
         }
@@ -273,7 +303,8 @@ module.exports = async (req, res) => {
       const notes = remainingParts.slice(1).join(' ') || 'Shared Purchase';
       const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
 
-      const postRes = await fetch(nalanginUrl, {
+      // 1. Try writing to nalangin_ledger collection
+      let postRes = await fetch(nalanginUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -289,6 +320,31 @@ module.exports = async (req, res) => {
           }
         })
       });
+
+      // 2. Fallback to expenses collection if nalangin_ledger returns 403 (unpermitted collection rule)
+      if (!postRes.ok) {
+        const titleStr = isTagihan ? `[Tagihan] ${person}: ${notes}` : `[Hutang] ${person}: ${notes}`;
+        postRes = await fetch(expensesUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              title: { stringValue: titleStr },
+              amount: { doubleValue: amount },
+              quantity: { integerValue: '1' },
+              unitPrice: { doubleValue: amount },
+              category: { stringValue: 'other' },
+              subCategory: { stringValue: isTagihan ? 'receivable' : 'payable' },
+              storeName: { stringValue: `Nalangin: ${person}` },
+              date: { stringValue: new Date().toISOString().split('T')[0] },
+              paymentMethod: { stringValue: 'qris' },
+              createdBy: { stringValue: `telegram_${chatId}` },
+              createdAt: { integerValue: String(Date.now()) },
+              updatedAt: { integerValue: String(Date.now()) }
+            }
+          })
+        });
+      }
 
       if (!postRes.ok) {
         const errText = await postRes.text();

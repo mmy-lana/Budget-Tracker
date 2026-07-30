@@ -1,6 +1,6 @@
 export type FoodSubCategory = 'ingredients' | 'cafe_coffee' | 'online_delivery' | 'resto_dining' | 'snacks';
 export type EntertainmentSubCategory = 'movies_theater' | 'events' | 'other';
-export type ExpenseSubCategory = FoodSubCategory | EntertainmentSubCategory | 'fixed' | 'vehicle' | 'utility' | 'other';
+export type ExpenseSubCategory = FoodSubCategory | EntertainmentSubCategory | 'fixed' | 'vehicle' | 'utility' | 'other' | 'receivable' | 'payable';
 
 export type ExpenseCategory = 
   | 'food' 

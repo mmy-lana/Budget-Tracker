@@ -1,4 +1,4 @@
-import { Injectable, signal, inject } from '@angular/core';
+import { Injectable, signal, inject, computed } from '@angular/core';
 import { 
   collection, 
   addDoc, 
@@ -47,7 +47,31 @@ export class ExpenseService {
     { id: 'acc_gopay', name: 'GoPay', type: 'e-wallet', balance: 450000, updatedAt: Date.now() },
     { id: 'acc_cash', name: 'Cash', type: 'cash', balance: 750000, updatedAt: Date.now() }
   ]);
-  readonly nalanginList = signal<NalanginLedger[]>([]);
+  readonly nalanginLedgerRealtime = signal<NalanginLedger[]>([]);
+
+  readonly nalanginList = computed(() => {
+    const fromLedger = this.nalanginLedgerRealtime();
+    const fromExpenses = this.expenses()
+      .filter(e => (e.subCategory as string) === 'receivable' || (e.subCategory as string) === 'payable' || e.title.startsWith('[Tagihan]') || e.title.startsWith('[Hutang]'))
+      .map(e => {
+        const isRec = (e.subCategory as string) === 'receivable' || e.title.startsWith('[Tagihan]');
+        const personMatch = e.title.match(/\[(?:Tagihan|Hutang)\]\s*([^:]+):/i);
+        const person = personMatch ? personMatch[1].trim() : (e.storeName?.replace('Nalangin:', '').trim() || 'Friend');
+        const notes = e.title.replace(/\[(?:Tagihan|Hutang)\]\s*[^:]+:\s*/i, '');
+        return {
+          id: e.id,
+          type: isRec ? 'receivable' : 'payable',
+          person,
+          amount: e.amount,
+          date: e.date,
+          notes: notes || e.title,
+          status: 'pending',
+          createdAt: e.createdAt
+        } as NalanginLedger;
+      });
+
+    return [...fromLedger, ...fromExpenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  });
   readonly savingsTargets = signal<SavingsTarget[]>([
     { id: 'sav_1', title: 'Dana Darurat Target', targetAmount: 30642900, currentAmount: 19917885, deadlineMonths: 6, monthlyAllocation: 5107150 },
     { id: 'sav_2', title: 'Sewa Apartemen Target', targetAmount: 20400000, currentAmount: 16320000, deadlineMonths: 12, monthlyAllocation: 1700000 }
@@ -71,15 +95,15 @@ export class ExpenseService {
       onSnapshot(q, (snapshot) => {
         if (!snapshot.empty) {
           const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as NalanginLedger));
-          this.nalanginList.set(items);
+          this.nalanginLedgerRealtime.set(items);
         } else {
-          this.nalanginList.set([]);
+          this.nalanginLedgerRealtime.set([]);
         }
       }, () => {
-        this.nalanginList.set([]);
+        this.nalanginLedgerRealtime.set([]);
       });
     } catch (e) {
-      this.nalanginList.set([]);
+      this.nalanginLedgerRealtime.set([]);
     }
   }
 
