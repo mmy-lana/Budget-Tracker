@@ -8,8 +8,9 @@ export const authGuard: CanActivateFn = (route, state) => {
 
   const stateVal = authService.authState();
 
+  // Allow navigation while initial Firebase session restore is in progress
   if (stateVal.isLoading) {
-    return true; // Let initial auth check complete asynchronously
+    return true;
   }
 
   if (stateVal.isAuthenticated && !stateVal.isMfaPending) {

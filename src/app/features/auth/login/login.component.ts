@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, effect, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { AuthService } from '../../../core/services/auth.service';
@@ -76,6 +76,14 @@ export class LoginComponent {
   router = inject(Router);
 
   email = signal<string>('');
+
+  constructor() {
+    effect(() => {
+      if (this.authService.authState().isAuthenticated) {
+        this.router.navigate(['/dashboard']);
+      }
+    });
+  }
   password = signal<string>('');
   loading = signal<boolean>(false);
   errorMessage = signal<string>('');
