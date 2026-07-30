@@ -59,10 +59,19 @@ module.exports = async (req, res) => {
       return res.status(200).json({ status: 'help_sent' });
     }
 
-    const pendingDocUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram/${chatId}${apiKeyParam}`;
-    const pendingCollectionUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?documentId=${chatId}${FIREBASE_API_KEY ? '&key=' + FIREBASE_API_KEY : ''}`;
-    const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}`;
-    const nalanginUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/nalangin_ledger${apiKeyParam}`;
+    function buildFirestoreUrl(collectionPath, queryParams = '') {
+      let url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/${collectionPath}`;
+      const params = [];
+      if (FIREBASE_API_KEY) params.push(`key=${FIREBASE_API_KEY}`);
+      if (queryParams) params.push(queryParams);
+      if (params.length > 0) url += '?' + params.join('&');
+      return url;
+    }
+
+    const pendingDocUrl = buildFirestoreUrl(`pending_telegram/${chatId}`);
+    const pendingCollectionUrl = buildFirestoreUrl('pending_telegram', `documentId=${chatId}`);
+    const expensesUrl = buildFirestoreUrl('expenses');
+    const nalanginUrl = buildFirestoreUrl('nalangin_ledger');
 
     // Rule 1: IGNORE raw image inputs
     if (message.photo && (!message.caption || message.caption.trim() === '')) {
@@ -99,7 +108,7 @@ module.exports = async (req, res) => {
     // Command: today expense / pengeluaran hari ini
     if (cleanLower === 'today expense' || cleanLower === 'pengeluaran hari ini') {
       const today = new Date().toISOString().split('T')[0];
-      const resExp = await fetch(`${expensesUrl}&pageSize=50`);
+      const resExp = await fetch(buildFirestoreUrl('expenses', 'pageSize=50'));
       let todayTotal = 0;
       let itemListText = '';
 
@@ -126,7 +135,7 @@ module.exports = async (req, res) => {
     // Command: list tagihan / list hutang / list nalangin
     if (/^list\s+(tagihan|hutang|nalangin)/i.test(cleanLower)) {
       const targetType = cleanLower.includes('tagihan') ? 'receivable' : cleanLower.includes('hutang') ? 'payable' : 'all';
-      const resNal = await fetch(`${nalanginUrl}&pageSize=50`);
+      const resNal = await fetch(buildFirestoreUrl('nalangin_ledger', 'pageSize=50'));
       let listText = '';
 
       if (resNal.ok) {
@@ -282,9 +291,9 @@ module.exports = async (req, res) => {
       });
 
       if (isTagihan) {
-        await sendBotMessage(chatId, `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString('id-ID')} for '${notes}'.`, TELEGRAM_BOT_TOKEN);
+        await sendBotMessage(chatId, `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString('id-ID')} for '${notes}'.\n_(Saved directly to Nalangin Ledger - no confirmation needed)_`, TELEGRAM_BOT_TOKEN);
       } else {
-        await sendBotMessage(chatId, `📌 *Payable Logged!* [${shortId}] Hutang to *${person}*: Rp ${amount.toLocaleString('id-ID')} for '${notes}'.`, TELEGRAM_BOT_TOKEN);
+        await sendBotMessage(chatId, `📌 *Payable Logged!* [${shortId}] Hutang to *${person}*: Rp ${amount.toLocaleString('id-ID')} for '${notes}'.\n_(Saved directly to Nalangin Ledger - no confirmation needed)_`, TELEGRAM_BOT_TOKEN);
       }
 
       return res.status(200).json({ status: 'nalangin_created', shortId });

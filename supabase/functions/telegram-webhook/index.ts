@@ -54,13 +54,22 @@ serve(async (req: Request) => {
     }
 
     const FIREBASE_API_KEY = Deno.env.get("FIREBASE_API_KEY") || Deno.env.get("NG_APP_FIREBASE_API_KEY") || "";
-    const apiKeyParam = FIREBASE_API_KEY ? `?key=${FIREBASE_API_KEY}` : "";
-    const nalanginUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/nalangin_ledger${apiKeyParam}`;
+
+    function buildFirestoreUrl(collectionPath: string, queryParams: string = "") {
+      let url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/${collectionPath}`;
+      const params: string[] = [];
+      if (FIREBASE_API_KEY) params.push(`key=${FIREBASE_API_KEY}`);
+      if (queryParams) params.push(queryParams);
+      if (params.length > 0) url += "?" + params.join("&");
+      return url;
+    }
+
+    const nalanginUrl = buildFirestoreUrl("nalangin_ledger");
 
     // Command: today expense / pengeluaran hari ini
     if (cleanLower === "today expense" || cleanLower === "pengeluaran hari ini") {
       const today = new Date().toISOString().split('T')[0];
-      const resExp = await fetch(`https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}&pageSize=50`);
+      const resExp = await fetch(buildFirestoreUrl("expenses", "pageSize=50"));
       let todayTotal = 0;
       let itemListText = "";
 
@@ -87,7 +96,7 @@ serve(async (req: Request) => {
     // Command: list tagihan / list hutang
     if (/^list\s+(tagihan|hutang|nalangin)/i.test(cleanLower)) {
       const targetType = cleanLower.includes("tagihan") ? "receivable" : cleanLower.includes("hutang") ? "payable" : "all";
-      const resNal = await fetch(`${nalanginUrl}&pageSize=50`);
+      const resNal = await fetch(buildFirestoreUrl("nalangin_ledger", "pageSize=50"));
       let listText = "";
 
       if (resNal.ok) {
@@ -159,8 +168,8 @@ serve(async (req: Request) => {
       });
 
       const msg = isTagihan 
-        ? `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString("id-ID")} for '${notes}'.`
-        : `📌 *Payable Logged!* [${shortId}] Hutang to *${person}*: Rp ${amount.toLocaleString("id-ID")} for '${notes}'.`;
+        ? `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString("id-ID")} for '${notes}'.\n_(Saved directly to Nalangin Ledger - no confirmation needed)_`
+        : `📌 *Payable Logged!* [${shortId}] Hutang to *${person}*: Rp ${amount.toLocaleString("id-ID")} for '${notes}'.\n_(Saved directly to Nalangin Ledger - no confirmation needed)_`;
       
       await sendTelegramMessage(chatId, msg);
       return new Response("nalangin_created", { status: 200 });
