@@ -5,6 +5,8 @@ import {
   onAuthStateChanged, 
   GoogleAuthProvider, 
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   multiFactor,
   TotpMultiFactorGenerator,
   TotpSecret,
@@ -33,6 +35,12 @@ export class AuthService {
   private mfaResolver: MultiFactorResolver | null = null;
 
   constructor() {
+    getRedirectResult(this.firebaseService.auth).then((result) => {
+      if (result) {
+        this.syncUserProfile(result.user);
+      }
+    });
+
     onAuthStateChanged(this.firebaseService.auth, async (firebaseUser) => {
       if (firebaseUser) {
         await this.syncUserProfile(firebaseUser);
@@ -70,8 +78,13 @@ export class AuthService {
       const result = await signInWithPopup(this.firebaseService.auth, provider);
       await this.syncUserProfile(result.user);
     } catch (err: any) {
-      this.authState.update(s => ({ ...s, error: err.message }));
-      throw err;
+      if (err.code === 'auth/popup-blocked' || err.code === 'auth/popup-closed-by-user') {
+        // Fallback to page redirect when popups are blocked by Firefox/Safari privacy settings
+        await signInWithRedirect(this.firebaseService.auth, provider);
+      } else {
+        this.authState.update(s => ({ ...s, error: err.message }));
+        throw err;
+      }
     }
   }
 
