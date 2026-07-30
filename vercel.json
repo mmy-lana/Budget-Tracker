@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "angular",
+  "buildCommand": "ng build --configuration production",
+  "outputDirectory": "dist/budget-tracker/browser",
+  "rewrites": [
+    {
+      "source": "/__/auth/(.*)",
+      "destination": "https://positive-harbor-723.firebaseapp.com/__/auth/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

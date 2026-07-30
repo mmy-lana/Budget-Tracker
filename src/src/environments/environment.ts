@@ -2,7 +2,7 @@ export const environment = {
   production: false,
   firebase: {
     apiKey: process.env['NG_APP_FIREBASE_API_KEY'] || '',
-    authDomain: process.env['NG_APP_FIREBASE_AUTH_DOMAIN'] || '',
+    authDomain: typeof window !== 'undefined' ? window.location.host : 'positive-harbor-723.firebaseapp.com',
     databaseURL: process.env['NG_APP_FIREBASE_DATABASE_URL'] || '',
     projectId: process.env['NG_APP_FIREBASE_PROJECT_ID'] || '',
     messagingSenderId: process.env['NG_APP_FIREBASE_MESSAGING_SENDER_ID'] || '',

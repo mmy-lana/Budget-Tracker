@@ -74,17 +74,13 @@ export class AuthService {
 
   async loginWithGoogle(): Promise<void> {
     const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
     try {
       const result = await signInWithPopup(this.firebaseService.auth, provider);
       await this.syncUserProfile(result.user);
     } catch (err: any) {
-      if (err.code === 'auth/popup-blocked' || err.code === 'auth/popup-closed-by-user') {
-        // Fallback to page redirect when popups are blocked by Firefox/Safari privacy settings
-        await signInWithRedirect(this.firebaseService.auth, provider);
-      } else {
-        this.authState.update(s => ({ ...s, error: err.message }));
-        throw err;
-      }
+      // Direct redirect OAuth fallback for partitioned third-party storage contexts
+      await signInWithRedirect(this.firebaseService.auth, provider);
     }
   }
 
