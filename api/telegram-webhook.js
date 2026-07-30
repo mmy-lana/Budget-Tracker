@@ -1,6 +1,15 @@
 // In-memory cache for fast serverless state retention
 const pendingCache = new Map();
 
+async function sendBotMessage(chatId, text, token) {
+  if (!token) return;
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
+  });
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -26,40 +35,259 @@ module.exports = async (req, res) => {
     const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || process.env.NG_APP_FIREBASE_API_KEY || '';
     const apiKeyParam = FIREBASE_API_KEY ? `?key=${FIREBASE_API_KEY}` : '';
 
+    const rawText = (message.text || message.caption || '').replace(/['"]/g, '').trim();
+    const cleanLower = rawText.toLowerCase();
+
+    // 1. Bot Helper Command: /myid
+    if (cleanLower === '/myid' || cleanLower === '/id') {
+      await sendBotMessage(chatId, `🆔 *Your Telegram Chat ID:* \`${chatId}\`\n\nAdd this Chat ID to \`TELEGRAM_AUTHORIZED_CHAT_IDS\` in your environment variables.`, TELEGRAM_BOT_TOKEN);
+      return res.status(200).json({ status: 'myid_replied', chatId });
+    }
+
+    // 2. Chat ID Whitelist Security Guard
+    const allowedChatIds = (process.env.TELEGRAM_AUTHORIZED_CHAT_IDS || process.env.NG_APP_TELEGRAM_AUTHORIZED_CHAT_IDS || '').split(',').map(id => id.trim()).filter(Boolean);
+
+    if (allowedChatIds.length > 0 && !allowedChatIds.includes(chatId)) {
+      await sendBotMessage(chatId, '⛔ *Access Denied:* Your Telegram Chat ID is not authorized to log expenses on this Budget Tracker instance.', TELEGRAM_BOT_TOKEN);
+      return res.status(200).json({ status: 'unauthorized_chat_id', chatId });
+    }
+
+    // 3. Help Menu Command
+    if (cleanLower === 'help' || cleanLower === '/help' || cleanLower === '/start') {
+      const helpMenu = `🤖 *BudgetTracker Bot Command Menu*\n\n📝 *Logging Expenses:*\n• \`Pecel ayam 2 total 50rb\` (Standard expense entry)\n• \`yes\` / \`correct for ID123\` (Confirm pending entry)\n• \`cancel\` (Discard pending entry)\n\n🤝 *Nalangin (Debts & Receivables):*\n• \`tagihan ilyas 50k pecel ayam\` (Log receivable)\n• \`hutang ilyas 50k pizza\` (Log payable)\n• \`tagihan ilyas ID888 lunas\` (Settle receivable & add expense)\n• \`hutang ilyas ID777 lunas\` (Settle payable)\n\n📊 *Queries & Reports:*\n• \`today expense\` / \`pengeluaran hari ini\`\n• \`list tagihan\` / \`list hutang\`\n• \`pending list\`\n• \`/myid\` (Get your Chat ID)`;
+      await sendBotMessage(chatId, helpMenu, TELEGRAM_BOT_TOKEN);
+      return res.status(200).json({ status: 'help_sent' });
+    }
+
     const pendingDocUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram/${chatId}${apiKeyParam}`;
     const pendingCollectionUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?documentId=${chatId}${FIREBASE_API_KEY ? '&key=' + FIREBASE_API_KEY : ''}`;
     const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}`;
+    const nalanginUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/nalangin_ledger${apiKeyParam}`;
 
     // Rule 1: IGNORE raw image inputs
     if (message.photo && (!message.caption || message.caption.trim() === '')) {
-      if (TELEGRAM_BOT_TOKEN) {
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: '📷 *Image received.* Please send a text description with price to log an expense (e.g., `Pecel ayam 2 total 50rb`).'
-          })
-        });
-      }
+      await sendBotMessage(chatId, '📷 *Image received.* Please send a text description with price to log an expense (e.g., `Pecel ayam 2 total 50rb`).', TELEGRAM_BOT_TOKEN);
       return res.status(200).json({ status: 'image_ignored_without_text' });
     }
 
-    const rawText = (message.text || message.caption || '').replace(/['"]/g, '').trim();
+    // Command: pending list
+    if (cleanLower === 'pending list') {
+      let pendingData = pendingCache.get(chatId);
+      if (!pendingData) {
+        const pRes = await fetch(pendingDocUrl);
+        if (pRes.ok) {
+          const pDoc = await pRes.json();
+          if (pDoc.fields?.pendingId) {
+            pendingData = {
+              pendingId: pDoc.fields.pendingId.stringValue,
+              title: pDoc.fields.title?.stringValue,
+              totalAmount: Number(pDoc.fields.totalAmount?.doubleValue || pDoc.fields.totalAmount?.integerValue || 0),
+              quantity: Number(pDoc.fields.quantity?.integerValue || 1)
+            };
+          }
+        }
+      }
 
-    if (rawText.startsWith('/') || rawText.toLowerCase() === 'ping') {
-      if (TELEGRAM_BOT_TOKEN) {
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
+      if (pendingData) {
+        await sendBotMessage(chatId, `📌 *Pending Entry Awaiting Confirmation:*\n\nID: *[${pendingData.pendingId}]*\nItem: ${pendingData.title}\nTotal: Rp ${pendingData.totalAmount.toLocaleString('id-ID')}\n\nReply \`yes\` or \`cancel\`.`, TELEGRAM_BOT_TOKEN);
+      } else {
+        await sendBotMessage(chatId, '✨ No pending expenses awaiting confirmation.', TELEGRAM_BOT_TOKEN);
+      }
+      return res.status(200).json({ status: 'pending_list_replied' });
+    }
+
+    // Command: today expense / pengeluaran hari ini
+    if (cleanLower === 'today expense' || cleanLower === 'pengeluaran hari ini') {
+      const today = new Date().toISOString().split('T')[0];
+      const resExp = await fetch(`${expensesUrl}&pageSize=50`);
+      let todayTotal = 0;
+      let itemListText = '';
+
+      if (resExp.ok) {
+        const data = await resExp.json();
+        if (data.documents && data.documents.length > 0) {
+          for (const doc of data.documents) {
+            const f = doc.fields || {};
+            if (f.date?.stringValue === today) {
+              const itemTitle = f.title?.stringValue || 'Item';
+              const itemAmt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
+              todayTotal += itemAmt;
+              itemListText += `• *${itemTitle}*: Rp ${itemAmt.toLocaleString('id-ID')}\n`;
+            }
+          }
+        }
+      }
+
+      const report = `📊 *Today's Expenses (${today})*\n\n${itemListText || 'No expenses logged today.\n'}\n💵 *Total Spent:* Rp ${todayTotal.toLocaleString('id-ID')}`;
+      await sendBotMessage(chatId, report, TELEGRAM_BOT_TOKEN);
+      return res.status(200).json({ status: 'today_expense_sent' });
+    }
+
+    // Command: list tagihan / list hutang / list nalangin
+    if (/^list\s+(tagihan|hutang|nalangin)/i.test(cleanLower)) {
+      const targetType = cleanLower.includes('tagihan') ? 'receivable' : cleanLower.includes('hutang') ? 'payable' : 'all';
+      const resNal = await fetch(`${nalanginUrl}&pageSize=50`);
+      let listText = '';
+
+      if (resNal.ok) {
+        const data = await resNal.json();
+        if (data.documents && data.documents.length > 0) {
+          for (const doc of data.documents) {
+            const f = doc.fields || {};
+            const st = f.status?.stringValue || 'pending';
+            const type = f.type?.stringValue || 'receivable';
+
+            if (st === 'pending' && (targetType === 'all' || type === targetType)) {
+              const docId = doc.name.split('/').pop();
+              const shortId = f.shortId?.stringValue || docId.substring(0, 6);
+              const person = f.person?.stringValue || 'Person';
+              const amt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
+              const notes = f.notes?.stringValue || '';
+              const tag = type === 'receivable' ? 'Tagihan' : 'Hutang';
+              listText += `• *[${shortId}]* ${tag} to *${person}*: Rp ${amt.toLocaleString('id-ID')} (${notes})\n`;
+            }
+          }
+        }
+      }
+
+      const replyList = `🤝 *Pending Nalangin Ledger*\n\n${listText || 'No pending debts or receivables found.'}`;
+      await sendBotMessage(chatId, replyList, TELEGRAM_BOT_TOKEN);
+      return res.status(200).json({ status: 'nalangin_list_sent' });
+    }
+
+    // Command: Nalangin Settlement ("lunas")
+    if (cleanLower.includes('lunas') && (cleanLower.includes('tagihan') || cleanLower.includes('hutang'))) {
+      const isTagihan = cleanLower.includes('tagihan');
+      const resNal = await fetch(`${nalanginUrl}&pageSize=50`);
+
+      let targetDoc = null;
+      if (resNal.ok) {
+        const data = await resNal.json();
+        if (data.documents && data.documents.length > 0) {
+          for (const doc of data.documents) {
+            const f = doc.fields || {};
+            const st = f.status?.stringValue || 'pending';
+            const type = f.type?.stringValue || 'receivable';
+            const person = (f.person?.stringValue || '').toLowerCase();
+            const shortId = (f.shortId?.stringValue || '').toLowerCase();
+
+            if (st === 'pending' && type === (isTagihan ? 'receivable' : 'payable')) {
+              if (cleanLower.includes(person) || cleanLower.includes(shortId) || data.documents.length === 1) {
+                targetDoc = doc;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (targetDoc) {
+        const f = targetDoc.fields || {};
+        const person = f.person?.stringValue || 'Person';
+        const amt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
+        const notes = f.notes?.stringValue || 'Nalangin Item';
+        const shortId = f.shortId?.stringValue || 'ID000';
+
+        // Update Nalangin Status to Settled via PATCH
+        const updateUrl = `https://firestore.googleapis.com/v1/${targetDoc.name}${apiKeyParam}&updateMask.fieldPaths=status&updateMask.fieldPaths=settledAt`;
+        await fetch(updateUrl, {
+          method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            chat_id: chatId,
-            text: '👋 *Budget Tracker Bot Online!*\nSend expenses like: `Pecel ayam 2 50k` or `Kopi 25rb`',
-            parse_mode: 'Markdown'
+            fields: {
+              status: { stringValue: 'settled' },
+              settledAt: { integerValue: Date.now() }
+            }
           })
         });
+
+        if (isTagihan) {
+          // Log expense entry under Bank Jago (Joint)
+          await fetch(expensesUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fields: {
+                title: { stringValue: `${notes} (${person})` },
+                amount: { doubleValue: amt },
+                quantity: { integerValue: 1 },
+                unitPrice: { doubleValue: amt },
+                category: { stringValue: 'food' },
+                subCategory: { stringValue: 'resto_dining' },
+                date: { stringValue: new Date().toISOString().split('T')[0] },
+                paymentMethod: { stringValue: 'qris' },
+                paymentAccountId: { stringValue: 'acc_jago' },
+                createdBy: { stringValue: `telegram_${chatId}` },
+                createdAt: { integerValue: Date.now() },
+                updatedAt: { integerValue: Date.now() }
+              }
+            })
+          });
+
+          await sendBotMessage(chatId, `✅ *Receivable Settled!* [${shortId}] *${person}* paid Rp ${amt.toLocaleString('id-ID')} ('${notes}'). Recorded as expense under Bank Jago.`, TELEGRAM_BOT_TOKEN);
+        } else {
+          await sendBotMessage(chatId, `✅ *Payable Settled!* [${shortId}] Paid Rp ${amt.toLocaleString('id-ID')} to *${person}* from Bank Jago.`, TELEGRAM_BOT_TOKEN);
+        }
+
+        return res.status(200).json({ status: 'nalangin_settled' });
+      } else {
+        await sendBotMessage(chatId, '⚠️ Could not find matching pending nalangin item to settle.', TELEGRAM_BOT_TOKEN);
+        return res.status(200).json({ status: 'nalangin_settle_failed' });
       }
-      return res.status(200).json({ status: 'command_handled' });
+    }
+
+    // Command: Nalangin Creation (tagihan [Person] [Amount] [Notes] / hutang [Person] [Amount] [Notes])
+    if (/^(tagihan|hutang)\s+/i.test(cleanLower)) {
+      const isTagihan = cleanLower.startsWith('tagihan');
+      const textWithoutPrefix = rawText.replace(/^(tagihan|hutang)\s+/i, '').trim();
+
+      // Extract amount from text
+      const amtMatch = textWithoutPrefix.match(/(\d+[\d\.]*)\s*(rb|k|ribu|rupiah|idr)?/i);
+      let amount = 0;
+      let amtRaw = '';
+      if (amtMatch) {
+        amtRaw = amtMatch[0];
+        let numStr = amtMatch[1].replace(/\./g, '');
+        let num = parseFloat(numStr);
+        let unit = (amtMatch[2] || '').toLowerCase();
+        if (unit === 'rb' || unit === 'k' || unit === 'ribu') num *= 1000;
+        amount = num;
+      }
+
+      if (amount <= 0) {
+        await sendBotMessage(chatId, '❓ Could not detect amount. Example: `tagihan ilyas 50k pecel ayam`', TELEGRAM_BOT_TOKEN);
+        return res.status(200).json({ status: 'invalid_nalangin_amount' });
+      }
+
+      const remainingParts = textWithoutPrefix.replace(amtRaw, ' ').trim().split(/\s+/);
+      const person = remainingParts[0] ? remainingParts[0].charAt(0).toUpperCase() + remainingParts[0].slice(1) : 'Friend';
+      const notes = remainingParts.slice(1).join(' ') || 'Shared Purchase';
+      const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
+
+      await fetch(nalanginUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fields: {
+            shortId: { stringValue: shortId },
+            person: { stringValue: person },
+            type: { stringValue: isTagihan ? 'receivable' : 'payable' },
+            amount: { doubleValue: amount },
+            date: { stringValue: new Date().toISOString().split('T')[0] },
+            notes: { stringValue: notes },
+            status: { stringValue: 'pending' },
+            createdAt: { integerValue: Date.now() }
+          }
+        })
+      });
+
+      if (isTagihan) {
+        await sendBotMessage(chatId, `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString('id-ID')} for '${notes}'.`, TELEGRAM_BOT_TOKEN);
+      } else {
+        await sendBotMessage(chatId, `📌 *Payable Logged!* [${shortId}] Hutang to *${person}*: Rp ${amount.toLocaleString('id-ID')} for '${notes}'.`, TELEGRAM_BOT_TOKEN);
+      }
+
+      return res.status(200).json({ status: 'nalangin_created', shortId });
     }
 
     const isCancellation = /^(cancel|batal|no|discard|hapus)/i.test(rawText);

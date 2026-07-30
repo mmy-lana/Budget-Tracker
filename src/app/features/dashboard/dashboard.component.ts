@@ -59,57 +59,69 @@ import { ExpenseEditorComponent } from '../expenses/expense-editor/expense-edito
         </div>
       }
 
-      <!-- Quick Stat Cards -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <app-stat-card 
-          title="Total Spent" 
-          [value]="summary().totalAmount" 
-          accentColor="emerald"
-          subtext="Current billing cycle">
-          <span icon>💸</span>
-        </app-stat-card>
+      <!-- Quick Stat Cards: Timeframe Totals (Today, Week, Month, Year) -->
+      <div class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            ⏱️ Timeframe Expenditure Velocity
+          </h2>
+          <app-button variant="outline" size="sm" (btnClick)="isBudgetConfigOpen.set(true)">
+            ⚙️ Set Budget Caps
+          </app-button>
+        </div>
 
-        <app-stat-card 
-          title="Monthly Buffer" 
-          [value]="2135700" 
-          accentColor="sky"
-          trendText="Safe"
-          trendType="up"
-          subtext="Net remaining liquid cash">
-          <span icon>🛡️</span>
-        </app-stat-card>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <app-stat-card 
+            title="Today's Spent" 
+            [value]="summary().timeframeTotals.todaySpent" 
+            accentColor="emerald"
+            subtext="Logged today">
+            <span icon>📅</span>
+          </app-stat-card>
 
-        <app-stat-card 
-          title="Food Budget" 
-          [value]="summary().categoryBreakdown.food" 
-          accentColor="amber"
-          subtext="Sub-categories cap tracking">
-          <span icon>🥗</span>
-        </app-stat-card>
+          <app-stat-card 
+            title="This Week's Spent" 
+            [value]="summary().timeframeTotals.thisWeekSpent" 
+            accentColor="sky"
+            subtext="Current week pace">
+            <span icon>📊</span>
+          </app-stat-card>
 
-        <app-stat-card 
-          title="Fixed Expenses" 
-          [value]="5107150" 
-          accentColor="rose"
-          subtext="Utilities, rent & commitments">
-          <span icon>⚡</span>
-        </app-stat-card>
+          <app-stat-card 
+            title="This Month's Spent" 
+            [value]="summary().timeframeTotals.thisMonthSpent" 
+            accentColor="amber"
+            subtext="Current month billing cycle">
+            <span icon>📆</span>
+          </app-stat-card>
+
+          <app-stat-card 
+            title="This Year's Total" 
+            [value]="summary().timeframeTotals.thisYearSpent" 
+            accentColor="rose"
+            subtext="Full year total">
+            <span icon>📈</span>
+          </app-stat-card>
+        </div>
       </div>
 
-      <!-- Rule 4: Multi-Account & Balance Audit Cards -->
+      <!-- Multi-Account & Balance Audit Cards with Inter-Account Transfer -->
       <div class="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         <div class="flex items-center justify-between">
           <div>
             <h2 class="text-lg font-bold text-slate-900 dark:text-white">Multi-Account Balances</h2>
-            <p class="text-xs text-slate-400">Joint bank accounts & e-wallets balance audit</p>
+            <p class="text-xs text-slate-400">Joint accounts, Dana Darurat & e-wallets balance audit</p>
           </div>
+          <app-button variant="secondary" size="sm" (btnClick)="isTransferModalOpen.set(true)">
+            ⇄ Transfer Funds
+          </app-button>
         </div>
 
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
           @for (acc of expenseService.accounts(); track acc.id) {
             <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 space-y-2">
               <div class="flex justify-between items-center text-xs text-slate-500">
-                <span class="font-semibold">{{ acc.name }}</span>
+                <span class="font-semibold truncate">{{ acc.name }}</span>
                 <button (click)="openAdjustModal(acc)" class="text-emerald-600 hover:underline text-[10px]">Adjust</button>
               </div>
               <p class="text-lg font-bold text-slate-900 dark:text-white">{{ acc.balance | currencyIdr }}</p>
@@ -147,7 +159,7 @@ import { ExpenseEditorComponent } from '../expenses/expense-editor/expense-edito
 
               <div>
                 @if (item.status === 'pending') {
-                  <button (click)="expenseService.settleNalanginItem(item.id)" 
+                  <button (click)="expenseService.toggleNalanginStatus(item.id)" 
                     class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm">
                     Settle
                   </button>
@@ -169,7 +181,7 @@ import { ExpenseEditorComponent } from '../expenses/expense-editor/expense-edito
           </app-expense-chart>
         </div>
 
-        <div class="p-6 rounded-2xl bg-gradient-to-br from-emerald-900 to-slate-900 text-white shadow-lg flex flex-col justify-between">
+        <div class="p-6 rounded-2xl bg-linear-to-br from-emerald-900 to-slate-900 text-white shadow-lg flex flex-col justify-between">
           <div>
             <div class="flex items-center justify-between mb-4">
               <span class="text-xs font-bold uppercase tracking-wider text-emerald-400">2-Step Interactive Bot</span>
@@ -232,6 +244,88 @@ import { ExpenseEditorComponent } from '../expenses/expense-editor/expense-edito
       </div>
     }
 
+    <!-- Inter-Account Transfer Modal -->
+    @if (isTransferModalOpen()) {
+      <div class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-6 space-y-4 border border-slate-200 dark:border-slate-800 shadow-2xl">
+          <h3 class="font-bold text-lg">⇄ Inter-Account Transfer</h3>
+
+          <div class="space-y-3">
+            <div>
+              <label class="text-xs font-semibold uppercase text-slate-500">From Account</label>
+              <select [value]="transferFromAcc()" (change)="transferFromAcc.set($any($event.target).value)"
+                class="w-full mt-1 p-2.5 border rounded-xl bg-slate-50 dark:bg-slate-800 text-sm outline-none">
+                <option value="">Select Source Account</option>
+                @for (acc of expenseService.accounts(); track acc.id) {
+                  <option [value]="acc.id">{{ acc.name }} (Rp {{ acc.balance.toLocaleString('id-ID') }})</option>
+                }
+              </select>
+            </div>
+
+            <div>
+              <label class="text-xs font-semibold uppercase text-slate-500">To Account</label>
+              <select [value]="transferToAcc()" (change)="transferToAcc.set($any($event.target).value)"
+                class="w-full mt-1 p-2.5 border rounded-xl bg-slate-50 dark:bg-slate-800 text-sm outline-none">
+                <option value="">Select Destination Account</option>
+                @for (acc of expenseService.accounts(); track acc.id) {
+                  <option [value]="acc.id">{{ acc.name }}</option>
+                }
+              </select>
+            </div>
+
+            <div>
+              <label class="text-xs font-semibold uppercase text-slate-500">Transfer Amount (Rp)</label>
+              <input type="number" [value]="transferAmount()" (input)="transferAmount.set(+$any($event.target).value)"
+                class="w-full mt-1 p-2.5 border rounded-xl bg-slate-50 dark:bg-slate-800 text-sm font-bold outline-none" />
+            </div>
+
+            <div>
+              <label class="text-xs font-semibold uppercase text-slate-500">Notes / Reason</label>
+              <input type="text" placeholder="e.g. Move to emergency fund / Top-up e-wallet" [value]="transferNotes()" (input)="transferNotes.set($any($event.target).value)"
+                class="w-full mt-1 p-2.5 border rounded-xl bg-slate-50 dark:bg-slate-800 text-sm outline-none" />
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-2 pt-3 border-t">
+            <app-button variant="ghost" (btnClick)="isTransferModalOpen.set(false)">Cancel</app-button>
+            <app-button variant="primary" (btnClick)="submitTransfer()">Execute Transfer</app-button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Category & Utility Budget Caps Configurator Modal -->
+    @if (isBudgetConfigOpen()) {
+      <div class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 w-full max-w-lg rounded-3xl p-6 space-y-4 border border-slate-200 dark:border-slate-800 shadow-2xl">
+          <div class="flex items-center justify-between border-b pb-3 border-slate-100 dark:border-slate-800">
+            <h3 class="font-bold text-lg">⚙️ Category & Utility Budget Caps</h3>
+            <button (click)="isBudgetConfigOpen.set(false)" class="text-slate-400 hover:text-slate-600">✕</button>
+          </div>
+
+          <p class="text-xs text-slate-400">Set custom monthly budget limits for Food, Electricity, Water, Entertainment & Transport to trigger automatic alerts.</p>
+
+          <div class="space-y-3 max-h-80 overflow-y-auto pr-1">
+            @for (b of expenseService.categoryBudgets(); track b.id) {
+              <div class="flex items-center justify-between gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200/80 dark:border-slate-700">
+                <span class="text-xs font-bold text-slate-800 dark:text-slate-200">{{ b.label }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-slate-400">Rp</span>
+                  <input type="number" [value]="b.limitAmount" 
+                    (change)="expenseService.updateCategoryBudget(b.id, +$any($event.target).value)" 
+                    class="w-32 p-1.5 border rounded-xl bg-white dark:bg-slate-900 text-xs font-bold text-right outline-none" />
+                </div>
+              </div>
+            }
+          </div>
+
+          <div class="flex justify-end pt-3 border-t">
+            <app-button variant="primary" (btnClick)="isBudgetConfigOpen.set(false)">Done</app-button>
+          </div>
+        </div>
+      </div>
+    }
+
     <!-- Modal Form -->
     @if (isModalOpen()) {
       <app-expense-editor 
@@ -243,6 +337,7 @@ import { ExpenseEditorComponent } from '../expenses/expense-editor/expense-edito
   `
 })
 export class DashboardComponent {
+  isBudgetConfigOpen = signal<boolean>(false);
   expenseService = inject(ExpenseService);
 
   summary = computed(() => this.expenseService.calculateSummary());
@@ -252,6 +347,12 @@ export class DashboardComponent {
   selectedAccountForAdjust = signal<PaymentAccount | null>(null);
   newAdjustBalance = signal<number>(0);
   adjustReason = signal<string>('');
+
+  isTransferModalOpen = signal<boolean>(false);
+  transferFromAcc = signal<string>('');
+  transferToAcc = signal<string>('');
+  transferAmount = signal<number>(0);
+  transferNotes = signal<string>('');
 
   openCreateModal(): void {
     this.activeEditingItem.set(null);
@@ -284,6 +385,26 @@ export class DashboardComponent {
       this.adjustReason().trim()
     );
     this.selectedAccountForAdjust.set(null);
+  }
+
+  submitTransfer(): void {
+    if (!this.transferFromAcc() || !this.transferToAcc() || this.transferAmount() <= 0) {
+      alert('Please select both source & destination accounts and a valid transfer amount.');
+      return;
+    }
+    if (this.transferFromAcc() === this.transferToAcc()) {
+      alert('Source and destination accounts must be different.');
+      return;
+    }
+    this.expenseService.transferFunds(
+      this.transferFromAcc(),
+      this.transferToAcc(),
+      this.transferAmount(),
+      this.transferNotes().trim()
+    );
+    this.isTransferModalOpen.set(false);
+    this.transferAmount.set(0);
+    this.transferNotes.set('');
   }
 
   async onSaveExpense(data: any): Promise<void> {

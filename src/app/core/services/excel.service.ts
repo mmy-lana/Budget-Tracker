@@ -7,21 +7,67 @@ import { ExpenseItem } from '../models/expense.model';
 })
 export class ExcelService {
 
+  downloadExcelTemplate(): void {
+    const templateData = [
+      {
+        Date: '2026-07-30 14:30',
+        Title: 'Sample Groceries Purchase',
+        Category: 'food',
+        SubCategory: 'ingredients',
+        Quantity: 2,
+        UnitPrice: 25000,
+        TotalAmount: 50000,
+        PaymentMethod: 'qris',
+        StoreName: 'Supermarket Jaya'
+      }
+    ];
+
+    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Expense_Template');
+    XLSX.writeFile(workbook, 'budget_tracker_template.xlsx');
+  }
+
   exportExpensesToExcel(expenses: ExpenseItem[], filename: string = 'expenses-report.xlsx'): void {
-    const worksheetData = expenses.map(e => ({
+    // 1. Group Summary By Month & Calculate Remaining Buffer
+    const monthlyGroups = new Map<string, number>();
+    for (const exp of expenses) {
+      const ym = exp.date?.substring(0, 7) || 'Unknown';
+      monthlyGroups.set(ym, (monthlyGroups.get(ym) || 0) + exp.amount);
+    }
+
+    const totalIncomeEstimate = 15750000;
+    const summaryRows = Array.from(monthlyGroups.entries()).map(([month, spent]) => ({
+      Month: month,
+      TotalIncome: totalIncomeEstimate,
+      TotalSpent: spent,
+      MoneyLeftBuffer: totalIncomeEstimate - spent,
+      Status: (totalIncomeEstimate - spent) >= 0 ? 'Surplus (Safe)' : 'Deficit (Over Budget)'
+    }));
+
+    // 2. All Expenses Log Sheet
+    const breakdownRows = expenses.map(e => ({
+      Month: e.date?.substring(0, 7) || '',
       Date: e.date,
       Title: e.title,
       Category: e.category.toUpperCase(),
+      SubCategory: e.subCategory || e.category,
       Quantity: e.quantity,
       UnitPrice: e.unitPrice,
       TotalAmount: e.amount,
       PaymentMethod: e.paymentMethod,
+      StoreName: e.storeName || '-',
       CreatedBy: e.createdBy
     }));
 
-    const worksheet = XLSX.utils.json_to_sheet(worksheetData);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Expenses');
+
+    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+    XLSX.utils.book_append_sheet(workbook, summarySheet, 'Monthly Summary & Buffer');
+
+    const breakdownSheet = XLSX.utils.json_to_sheet(breakdownRows);
+    XLSX.utils.book_append_sheet(workbook, breakdownSheet, 'Expenses Breakdown');
+
     XLSX.writeFile(workbook, filename);
   }
 

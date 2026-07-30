@@ -36,6 +36,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/savings/savings.component').then(m => m.SavingsComponent)
   },
   {
+    path: 'nalangin',
+    canActivate: [authGuard],
+    loadComponent: () => import('./features/nalangin/nalangin.component').then(m => m.NalanginComponent)
+  },
+  {
     path: 'import-export',
     canActivate: [authGuard],
     loadComponent: () => import('./features/import-export/import-export.component').then(m => m.ImportExportComponent)

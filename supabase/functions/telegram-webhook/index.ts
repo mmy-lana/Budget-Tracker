@@ -31,9 +31,139 @@ serve(async (req: Request) => {
     }
 
     const chatId = String(message.chat.id);
+    const rawText = (message.text || message.caption || "").replace(/['"]/g, '').trim();
+    const cleanLower = rawText.toLowerCase();
+
+    // Bot Helper Command: /myid
+    if (cleanLower === "/myid" || cleanLower === "/id") {
+      await sendTelegramMessage(chatId, `🆔 *Your Telegram Chat ID:* \`${chatId}\`\n\nAdd this Chat ID to \`TELEGRAM_AUTHORIZED_CHAT_IDS\` in your environment variables.`);
+      return new Response("myid_replied", { status: 200 });
+    }
+
+    // Chat ID Whitelist Guard
     if (ALLOWED_CHAT_IDS.length > 0 && ALLOWED_CHAT_IDS[0] !== "" && !ALLOWED_CHAT_IDS.includes(chatId)) {
-      await sendTelegramMessage(chatId, "⛔ Unauthorized user. Access restricted.");
+      await sendTelegramMessage(chatId, "⛔ *Access Denied:* Your Telegram Chat ID is not authorized to log expenses on this Budget Tracker instance.");
       return new Response("Unauthorized", { status: 200 });
+    }
+
+    // Help Menu Command
+    if (cleanLower === "help" || cleanLower === "/help" || cleanLower === "/start") {
+      const helpMenu = `🤖 *BudgetTracker Bot Command Menu*\n\n📝 *Logging Expenses:*\n• \`Pecel ayam 2 total 50rb\` (Standard expense entry)\n• \`yes\` / \`correct for ID123\` (Confirm pending entry)\n• \`cancel\` (Discard pending entry)\n\n🤝 *Nalangin (Debts & Receivables):*\n• \`tagihan ilyas 50k pecel ayam\` (Log receivable)\n• \`hutang ilyas 50k pizza\` (Log payable)\n• \`tagihan ilyas ID888 lunas\` (Settle receivable & add expense)\n• \`hutang ilyas ID777 lunas\` (Settle payable)\n\n📊 *Queries & Reports:*\n• \`today expense\` / \`pengeluaran hari ini\`\n• \`list tagihan\` / \`list hutang\`\n• \`pending list\`\n• \`/myid\` (Get your Chat ID)`;
+      await sendTelegramMessage(chatId, helpMenu);
+      return new Response("help_sent", { status: 200 });
+    }
+
+    const FIREBASE_API_KEY = Deno.env.get("FIREBASE_API_KEY") || Deno.env.get("NG_APP_FIREBASE_API_KEY") || "";
+    const apiKeyParam = FIREBASE_API_KEY ? `?key=${FIREBASE_API_KEY}` : "";
+    const nalanginUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/nalangin_ledger${apiKeyParam}`;
+
+    // Command: today expense / pengeluaran hari ini
+    if (cleanLower === "today expense" || cleanLower === "pengeluaran hari ini") {
+      const today = new Date().toISOString().split('T')[0];
+      const resExp = await fetch(`https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}&pageSize=50`);
+      let todayTotal = 0;
+      let itemListText = "";
+
+      if (resExp.ok) {
+        const data = await resExp.json();
+        if (data.documents && data.documents.length > 0) {
+          for (const doc of data.documents) {
+            const f = doc.fields || {};
+            if (f.date?.stringValue === today) {
+              const itemTitle = f.title?.stringValue || "Item";
+              const itemAmt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
+              todayTotal += itemAmt;
+              itemListText += `• *${itemTitle}*: Rp ${itemAmt.toLocaleString("id-ID")}\n`;
+            }
+          }
+        }
+      }
+
+      const report = `📊 *Today's Expenses (${today})*\n\n${itemListText || "No expenses logged today.\n"}\n💵 *Total Spent:* Rp ${todayTotal.toLocaleString("id-ID")}`;
+      await sendTelegramMessage(chatId, report);
+      return new Response("today_expense_sent", { status: 200 });
+    }
+
+    // Command: list tagihan / list hutang
+    if (/^list\s+(tagihan|hutang|nalangin)/i.test(cleanLower)) {
+      const targetType = cleanLower.includes("tagihan") ? "receivable" : cleanLower.includes("hutang") ? "payable" : "all";
+      const resNal = await fetch(`${nalanginUrl}&pageSize=50`);
+      let listText = "";
+
+      if (resNal.ok) {
+        const data = await resNal.json();
+        if (data.documents && data.documents.length > 0) {
+          for (const doc of data.documents) {
+            const f = doc.fields || {};
+            const st = f.status?.stringValue || "pending";
+            const type = f.type?.stringValue || "receivable";
+
+            if (st === "pending" && (targetType === "all" || type === targetType)) {
+              const shortId = f.shortId?.stringValue || "ID000";
+              const person = f.person?.stringValue || "Person";
+              const amt = Number(f.amount?.doubleValue || f.amount?.integerValue || 0);
+              const notes = f.notes?.stringValue || "";
+              const tag = type === "receivable" ? "Tagihan" : "Hutang";
+              listText += `• *[${shortId}]* ${tag} to *${person}*: Rp ${amt.toLocaleString("id-ID")} (${notes})\n`;
+            }
+          }
+        }
+      }
+
+      await sendTelegramMessage(chatId, `🤝 *Pending Nalangin Ledger*\n\n${listText || "No pending debts or receivables found."}`);
+      return new Response("nalangin_list_sent", { status: 200 });
+    }
+
+    // Command: Nalangin Creation (tagihan / hutang)
+    if (/^(tagihan|hutang)\s+/i.test(cleanLower) && !cleanLower.includes("lunas")) {
+      const isTagihan = cleanLower.startsWith("tagihan");
+      const textWithoutPrefix = rawText.replace(/^(tagihan|hutang)\s+/i, "").trim();
+
+      const amtMatch = textWithoutPrefix.match(/(\d+[\d\.]*)\s*(rb|k|ribu|rupiah|idr)?/i);
+      let amount = 0;
+      let amtRaw = "";
+      if (amtMatch) {
+        amtRaw = amtMatch[0];
+        let numStr = amtMatch[1].replace(/\./g, "");
+        let num = parseFloat(numStr);
+        let unit = (amtMatch[2] || "").toLowerCase();
+        if (unit === "rb" || unit === "k" || unit === "ribu") num *= 1000;
+        amount = num;
+      }
+
+      if (amount <= 0) {
+        await sendTelegramMessage(chatId, "❓ Could not detect amount. Example: `tagihan ilyas 50k pecel ayam`");
+        return new Response("invalid_nalangin_amount", { status: 200 });
+      }
+
+      const remainingParts = textWithoutPrefix.replace(amtRaw, " ").trim().split(/\s+/);
+      const person = remainingParts[0] ? remainingParts[0].charAt(0).toUpperCase() + remainingParts[0].slice(1) : "Friend";
+      const notes = remainingParts.slice(1).join(" ") || "Shared Purchase";
+      const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
+
+      await fetch(nalanginUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fields: {
+            shortId: { stringValue: shortId },
+            person: { stringValue: person },
+            type: { stringValue: isTagihan ? "receivable" : "payable" },
+            amount: { doubleValue: amount },
+            date: { stringValue: new Date().toISOString().split('T')[0] },
+            notes: { stringValue: notes },
+            status: { stringValue: "pending" },
+            createdAt: { integerValue: Date.now() }
+          }
+        })
+      });
+
+      const msg = isTagihan 
+        ? `📌 *Receivable Logged!* [${shortId}] Tagihan to *${person}*: Rp ${amount.toLocaleString("id-ID")} for '${notes}'.`
+        : `📌 *Payable Logged!* [${shortId}] Hutang to *${person}*: Rp ${amount.toLocaleString("id-ID")} for '${notes}'.`;
+      
+      await sendTelegramMessage(chatId, msg);
+      return new Response("nalangin_created", { status: 200 });
     }
 
     // Rule 1: IGNORE raw image inputs (do not write 0 IDR entries)
@@ -41,8 +171,10 @@ serve(async (req: Request) => {
       await sendTelegramMessage(chatId, "📷 Image received. Please send text description with price to log expense.");
       return new Response("Image ignored without text", { status: 200 });
     }
-
-    const rawText = message.text || message.caption || "";
+    if (message.photo && (!message.caption || message.caption.trim() === "")) {
+      await sendTelegramMessage(chatId, "📷 Image received. Please send text description with price to log expense.");
+      return new Response("Image ignored without text", { status: 200 });
+    }
     const isCancellation = /^(cancel|batal|no|discard|hapus)/i.test(rawText);
     const isConfirmation = /^(yes|ya|yep|confirm|correct|setuju)/i.test(rawText) || /correct for ID\d+/i.test(rawText);
 

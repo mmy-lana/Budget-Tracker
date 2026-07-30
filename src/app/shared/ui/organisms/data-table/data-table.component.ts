@@ -29,15 +29,58 @@ export type CategoryTab = 'all' | 'food' | 'fixed' | 'vehicle' | 'entertainment'
           }
         </div>
 
-        <!-- Timeframe View Filters -->
-        <div class="flex items-center gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
-          @for (tf of timeframeFilters; track tf.id) {
-            <button
-              (click)="activeTimeframe.set(tf.id)"
-              [class]="activeTimeframe() === tf.id ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'"
-              class="px-2.5 py-1 text-[11px] rounded-lg transition-all whitespace-nowrap">
-              {{ tf.label }}
-            </button>
+        <!-- Timeframe View Filters (Today, This Week, This Month, Select Month + Year) -->
+        <div class="flex items-center gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold">
+          <button 
+            (click)="activeTimeframe.set('today')" 
+            [class]="activeTimeframe() === 'today' ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'"
+            class="px-2.5 py-1 rounded-lg transition-all whitespace-nowrap">
+            Today
+          </button>
+          <button 
+            (click)="activeTimeframe.set('week')" 
+            [class]="activeTimeframe() === 'week' ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'"
+            class="px-2.5 py-1 rounded-lg transition-all whitespace-nowrap">
+            This Week
+          </button>
+          <button 
+            (click)="activeTimeframe.set('month')" 
+            [class]="activeTimeframe() === 'month' ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'"
+            class="px-2.5 py-1 rounded-lg transition-all whitespace-nowrap">
+            This Month
+          </button>
+          <button 
+            (click)="activeTimeframe.set('custom')" 
+            [class]="activeTimeframe() === 'custom' ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'"
+            class="px-2.5 py-1 rounded-lg transition-all whitespace-nowrap">
+            Select Month + Year
+          </button>
+
+          @if (activeTimeframe() === 'custom') {
+            <div class="flex items-center gap-1 pl-2 border-l border-slate-200 dark:border-slate-700 font-bold text-[11px]">
+              <select [value]="selectedMonth()" (change)="selectedMonth.set($any($event.target).value)" class="bg-transparent outline-none">
+                <option value="all">All Months</option>
+                <option value="01">Jan (01)</option>
+                <option value="02">Feb (02)</option>
+                <option value="03">Mar (03)</option>
+                <option value="04">Apr (04)</option>
+                <option value="05">May (05)</option>
+                <option value="06">Jun (06)</option>
+                <option value="07">Jul (07)</option>
+                <option value="08">Aug (08)</option>
+                <option value="09">Sep (09)</option>
+                <option value="10">Oct (10)</option>
+                <option value="11">Nov (11)</option>
+                <option value="12">Dec (12)</option>
+              </select>
+              <select [value]="selectedYear()" (change)="selectedYear.set($any($event.target).value)" class="bg-transparent outline-none">
+                <option value="all">All Years</option>
+                <option value="2025">2025</option>
+                <option value="2026">2026</option>
+                <option value="2027">2027</option>
+                <option value="2028">2028</option>
+              </select>
+            </div>
           }
         </div>
       </div>
@@ -74,7 +117,12 @@ export type CategoryTab = 'all' | 'food' | 'fixed' | 'vehicle' | 'entertainment'
           <tbody class="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-200">
             @for (item of filteredExpenses(); track item.id) {
               <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
-                <td class="px-5 py-4 whitespace-nowrap text-xs text-slate-500">{{ item.date }}</td>
+                <td class="px-5 py-4 whitespace-nowrap text-xs text-slate-500">
+                  <div class="font-semibold text-slate-900 dark:text-slate-100">{{ item.date }}</div>
+                  <div class="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-medium">
+                    {{ item.createdAt ? (item.createdAt | date:'HH:mm:ss') : '00:00:00' }}
+                  </div>
+                </td>
                 <td class="px-5 py-4 font-semibold text-slate-900 dark:text-white">
                   {{ item.title }}
                   @if (item.storeName) {
@@ -128,7 +176,9 @@ export class DataTableComponent {
 
   searchTerm = signal<string>('');
   activeTab = signal<CategoryTab>('all');
-  activeTimeframe = signal<TimeframeFilter>('all');
+  activeTimeframe = signal<'today' | 'week' | 'month' | 'custom'>('month');
+  selectedMonth = signal<string>(new Date().toISOString().split('-')[1]);
+  selectedYear = signal<string>(new Date().getFullYear().toString());
 
   categoryTabs: { id: CategoryTab; label: string }[] = [
     { id: 'all', label: 'All Transactions' },
@@ -139,19 +189,13 @@ export class DataTableComponent {
     { id: 'shared_nalangin', label: '🤝 Shared/Nalangin' }
   ];
 
-  timeframeFilters: { id: TimeframeFilter; label: string }[] = [
-    { id: 'all', label: 'All' },
-    { id: 'daily', label: 'Daily' },
-    { id: 'weekly', label: 'Weekly' },
-    { id: 'monthly', label: 'Monthly' },
-    { id: 'last_month', label: 'Last Month' }
-  ];
-
   filteredExpenses = computed(() => {
     const term = this.searchTerm().toLowerCase();
     const tab = this.activeTab();
     const tf = this.activeTimeframe();
-    const today = new Date().toISOString().split('T')[0];
+    const selM = this.selectedMonth();
+    const selY = this.selectedYear();
+    const todayStr = new Date().toISOString().split('T')[0];
 
     return this.expenses().filter(item => {
       const matchesSearch = item.title.toLowerCase().includes(term);
@@ -164,12 +208,30 @@ export class DataTableComponent {
       }
 
       let matchesTf = true;
-      if (tf === 'daily') {
-        matchesTf = item.date === today;
+      if (tf === 'today') {
+        matchesTf = item.date === todayStr;
+      } else if (tf === 'week') {
+        const itemDate = new Date(item.date);
+        const now = new Date();
+        const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay() + 1));
+        startOfWeek.setHours(0, 0, 0, 0);
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(endOfWeek.getDate() + 6);
+        endOfWeek.setHours(23, 59, 59, 999);
+        matchesTf = itemDate >= startOfWeek && itemDate <= endOfWeek;
+      } else if (tf === 'month') {
+        const currentYM = new Date().toISOString().substring(0, 7);
+        matchesTf = item.date?.startsWith(currentYM);
+      } else if (tf === 'custom') {
+        const itemYearMonth = item.date?.substring(0, 7) || '';
+        const [itemY, itemM] = itemYearMonth.split('-');
+        const matchesMonth = selM === 'all' || itemM === selM;
+        const matchesYear = selY === 'all' || itemY === selY;
+        matchesTf = matchesMonth && matchesYear;
       }
 
       return matchesSearch && matchesTab && matchesTf;
-    });
+    }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   });
 
   onSearch(e: Event): void {

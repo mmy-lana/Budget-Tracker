@@ -58,11 +58,33 @@ export interface NalanginLedger {
   type: 'payable' | 'receivable'; // payable = bought using someone else's money; receivable = bought for someone else
   person: string;
   amount: number;
+  date?: string; // YYYY-MM-DD
   notes: string;
   status: 'pending' | 'settled';
   transactionId?: string;
   createdAt: number;
   settledAt?: number;
+}
+
+export interface AccountTransfer {
+  id: string;
+  fromAccountId: string;
+  fromAccountName: string;
+  toAccountId: string;
+  toAccountName: string;
+  amount: number;
+  notes: string;
+  createdAt: number;
+}
+
+export interface DatabaseBackup {
+  version: string;
+  exportedAt: string;
+  expenses: ExpenseItem[];
+  accounts: PaymentAccount[];
+  nalanginLedger: NalanginLedger[];
+  savingsTargets: any[];
+  transfers: AccountTransfer[];
 }
 
 export interface PaymentAccount {
@@ -84,8 +106,23 @@ export interface BalanceAdjustmentLog {
   createdAt: number;
 }
 
+export interface CategoryBudgetSetting {
+  id: string;
+  key: string; // 'food', 'fixed', 'utility', 'entertainment', 'vehicle'
+  label: string;
+  limitAmount: number;
+  period: 'monthly' | 'weekly';
+}
+
+export interface TimeframeTotals {
+  todaySpent: number;
+  thisWeekSpent: number;
+  thisMonthSpent: number;
+  thisYearSpent: number;
+}
+
 export interface BudgetCapWarning {
-  type: 'food_subcategory' | 'overall_cycle';
+  type: 'food_subcategory' | 'overall_cycle' | 'category_cap';
   title: string;
   percentage: number;
   message: string;
@@ -96,6 +133,7 @@ export interface ExpenseSummary {
   totalItems: number;
   categoryBreakdown: Record<ExpenseCategory, number>;
   monthlyBuffer: number;
+  timeframeTotals: TimeframeTotals;
   warnings: BudgetCapWarning[];
 }
 
