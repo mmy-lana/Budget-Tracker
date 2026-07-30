@@ -1,3 +1,6 @@
+// In-memory cache for fast serverless state retention
+const pendingCache = new Map();
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -24,9 +27,10 @@ module.exports = async (req, res) => {
     const apiKeyParam = FIREBASE_API_KEY ? `?key=${FIREBASE_API_KEY}` : '';
 
     const pendingDocUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram/${chatId}${apiKeyParam}`;
+    const pendingCollectionUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?documentId=${chatId}${FIREBASE_API_KEY ? '&key=' + FIREBASE_API_KEY : ''}`;
     const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}`;
 
-    // Rule 1: IGNORE raw image inputs (do not write 0 IDR entries to Firestore)
+    // Rule 1: IGNORE raw image inputs
     if (message.photo && (!message.caption || message.caption.trim() === '')) {
       if (TELEGRAM_BOT_TOKEN) {
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -50,7 +54,7 @@ module.exports = async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: chatId,
-            text: '👋 *Budget Tracker Bot Online!*\nSend expenses like: `Pecel ayam 2 total 50rb` or `Kopi 25rb`',
+            text: '👋 *Budget Tracker Bot Online!*\nSend expenses like: `Pecel ayam 2 50k` or `Kopi 25rb`',
             parse_mode: 'Markdown'
           })
         });
@@ -63,6 +67,7 @@ module.exports = async (req, res) => {
 
     // Cancel Pending Entry
     if (isCancellation) {
+      pendingCache.delete(chatId);
       await fetch(pendingDocUrl, { method: 'DELETE' });
 
       if (TELEGRAM_BOT_TOKEN) {
@@ -75,29 +80,41 @@ module.exports = async (req, res) => {
       return res.status(200).json({ status: 'cancelled' });
     }
 
-    // Rule 2: 2-Step Interactive Text Parsing - Confirmation Step
+    // Confirmation Step
     if (isConfirmation) {
-      const pRes = await fetch(pendingDocUrl);
+      let pendingData = pendingCache.get(chatId);
 
-      if (pRes.ok) {
-        const pData = await pRes.json();
-        const fields = pData.fields || {};
-        const pendingId = fields.pendingId?.stringValue || 'ID000';
-        const title = fields.title?.stringValue || 'Expense';
-        const amount = Number(fields.totalAmount?.doubleValue || fields.totalAmount?.integerValue || 0);
-        const quantity = Number(fields.quantity?.integerValue || 1);
-        const unitPrice = Number(fields.unitPrice?.doubleValue || fields.unitPrice?.integerValue || amount);
-        const category = fields.category?.stringValue || 'food';
-        const subCategory = fields.subCategory?.stringValue || 'resto_dining';
+      // Fallback to Firestore if memory cache is empty
+      if (!pendingData) {
+        const pRes = await fetch(pendingDocUrl);
+        if (pRes.ok) {
+          const pDoc = await pRes.json();
+          const fields = pDoc.fields || {};
+          if (fields.pendingId) {
+            pendingData = {
+              pendingId: fields.pendingId.stringValue,
+              title: fields.title?.stringValue || 'Expense',
+              totalAmount: Number(fields.totalAmount?.doubleValue || fields.totalAmount?.integerValue || 0),
+              quantity: Number(fields.quantity?.integerValue || 1),
+              unitPrice: Number(fields.unitPrice?.doubleValue || fields.unitPrice?.integerValue || 0),
+              category: fields.category?.stringValue || 'food',
+              subCategory: fields.subCategory?.stringValue || 'resto_dining'
+            };
+          }
+        }
+      }
 
-        // Write Parent Transaction to Firestore
+      if (pendingData) {
+        const { pendingId, title, totalAmount, quantity, unitPrice, category, subCategory } = pendingData;
+
+        // Write Expense Record to Firestore
         await fetch(expensesUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             fields: {
               title: { stringValue: title },
-              amount: { doubleValue: amount },
+              amount: { doubleValue: totalAmount },
               quantity: { integerValue: quantity },
               unitPrice: { doubleValue: unitPrice },
               category: { stringValue: category },
@@ -111,11 +128,12 @@ module.exports = async (req, res) => {
           })
         });
 
-        // Delete pending document
+        // Clean up pending state
+        pendingCache.delete(chatId);
         await fetch(pendingDocUrl, { method: 'DELETE' });
 
         if (TELEGRAM_BOT_TOKEN) {
-          const confirmMsg = `✅ *Expense Confirmed & Recorded!* [${pendingId}]\n\n📌 *Item:* ${title}\n📦 *Qty:* ${quantity}\n💰 *Price:* Rp ${unitPrice.toLocaleString('id-ID')}\n💵 *Total:* Rp ${amount.toLocaleString('id-ID')}`;
+          const confirmMsg = `✅ *Expense Confirmed & Recorded!* [${pendingId}]\n\n📌 *Item:* ${title}\n📦 *Qty:* ${quantity}\n💰 *Price:* Rp ${unitPrice.toLocaleString('id-ID')}\n💵 *Total:* Rp ${totalAmount.toLocaleString('id-ID')}`;
           await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -224,9 +242,25 @@ module.exports = async (req, res) => {
 
     const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
 
-    // Store in Pending Collection (Direct Chat ID document key)
-    await fetch(pendingDocUrl, {
-      method: 'PATCH',
+    const pendingPayload = {
+      pendingId: shortId,
+      chatId,
+      title,
+      quantity,
+      unitPrice,
+      totalAmount,
+      category,
+      subCategory,
+      createdAt: Date.now()
+    };
+
+    // Save to in-memory map for instant lookup
+    pendingCache.set(chatId, pendingPayload);
+
+    // Save to Firestore (Delete old -> Create new with documentId=chatId)
+    await fetch(pendingDocUrl, { method: 'DELETE' });
+    await fetch(pendingCollectionUrl, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         fields: {

@@ -46,28 +46,49 @@ serve(async (req: Request) => {
     const isCancellation = /^(cancel|batal|no|discard|hapus)/i.test(rawText);
     const isConfirmation = /^(yes|ya|yep|confirm|correct|setuju)/i.test(rawText) || /correct for ID\d+/i.test(rawText);
 
+    const pendingCache = (globalThis as any)._pendingCache || ((globalThis as any)._pendingCache = new Map());
+
     const FIREBASE_API_KEY = Deno.env.get("FIREBASE_API_KEY") || Deno.env.get("NG_APP_FIREBASE_API_KEY") || "";
     const apiKeyParam = FIREBASE_API_KEY ? `?key=${FIREBASE_API_KEY}` : "";
     const pendingDocUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram/${chatId}${apiKeyParam}`;
+    const pendingCollectionUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/pending_telegram?documentId=${chatId}${FIREBASE_API_KEY ? '&key=' + FIREBASE_API_KEY : ''}`;
     const expensesUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/expenses${apiKeyParam}`;
 
     if (isCancellation) {
+      pendingCache.delete(chatId);
       await fetch(pendingDocUrl, { method: 'DELETE' });
       await sendTelegramMessage(chatId, "❌ *Pending entry cancelled.* Send a new expense description whenever you're ready.");
       return new Response("Cancelled", { status: 200 });
     }
 
     if (isConfirmation) {
-      const pRes = await fetch(pendingDocUrl);
+      let pendingData = pendingCache.get(chatId);
 
-      if (pRes.ok) {
-        const pData = await pRes.json();
-        const fields = pData.fields || {};
-        const pendingId = fields.pendingId?.stringValue || 'ID000';
-        const title = fields.title?.stringValue || 'Expense';
-        const amount = Number(fields.totalAmount?.doubleValue || fields.totalAmount?.integerValue || 0);
-        const quantity = Number(fields.quantity?.integerValue || 1);
-        const unitPrice = Number(fields.unitPrice?.doubleValue || fields.unitPrice?.integerValue || amount);
+      if (!pendingData) {
+        const pRes = await fetch(pendingDocUrl);
+        if (pRes.ok) {
+          const pDoc = await pRes.json();
+          const fields = pDoc.fields || {};
+          if (fields.pendingId) {
+            pendingData = {
+              pendingId: fields.pendingId.stringValue,
+              title: fields.title?.stringValue || 'Expense',
+              amount: Number(fields.totalAmount?.doubleValue || fields.totalAmount?.integerValue || 0),
+              quantity: Number(fields.quantity?.integerValue || 1),
+              unitPrice: Number(fields.unitPrice?.doubleValue || fields.unitPrice?.integerValue || 0),
+              category: fields.category?.stringValue || 'food',
+              subCategory: fields.subCategory?.stringValue || 'resto_dining'
+            };
+          }
+        }
+      }
+
+      if (pendingData) {
+        const pendingId = pendingData.pendingId || 'ID000';
+        const title = pendingData.title || 'Expense';
+        const amount = pendingData.amount || pendingData.totalAmount || 0;
+        const quantity = pendingData.quantity || 1;
+        const unitPrice = pendingData.unitPrice || amount;
 
         await fetch(expensesUrl, {
           method: "POST",
@@ -78,8 +99,8 @@ serve(async (req: Request) => {
               amount: { doubleValue: amount },
               quantity: { integerValue: quantity },
               unitPrice: { doubleValue: unitPrice },
-              category: { stringValue: fields.category?.stringValue || "food" },
-              subCategory: { stringValue: fields.subCategory?.stringValue || "resto_dining" },
+              category: { stringValue: pendingData.category || "food" },
+              subCategory: { stringValue: pendingData.subCategory || "resto_dining" },
               date: { stringValue: new Date().toISOString().split('T')[0] },
               paymentMethod: { stringValue: "qris" },
               createdBy: { stringValue: `telegram_${chatId}` },
@@ -89,6 +110,7 @@ serve(async (req: Request) => {
           })
         });
 
+        pendingCache.delete(chatId);
         await fetch(pendingDocUrl, { method: 'DELETE' });
 
         await sendTelegramMessage(chatId, `✅ *Expense Recorded!* [${pendingId}]\n📌 *Item:* ${title}\n📦 *Qty:* ${quantity}\n💰 *Price:* Rp ${unitPrice.toLocaleString("id-ID")}\n💵 *Total:* Rp ${amount.toLocaleString("id-ID")}`);
@@ -106,8 +128,23 @@ serve(async (req: Request) => {
     }
 
     const shortId = `ID${Math.floor(100 + Math.random() * 900)}`;
-    await fetch(pendingDocUrl, {
-      method: "PATCH",
+    const pendingPayload = {
+      pendingId: shortId,
+      chatId,
+      title: parsedExpense.title,
+      quantity: parsedExpense.quantity,
+      unitPrice: parsedExpense.unitPrice,
+      amount: parsedExpense.amount,
+      category: parsedExpense.category,
+      subCategory: parsedExpense.subCategory,
+      createdAt: Date.now()
+    };
+
+    pendingCache.set(chatId, pendingPayload);
+
+    await fetch(pendingDocUrl, { method: 'DELETE' });
+    await fetch(pendingCollectionUrl, {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         fields: {
