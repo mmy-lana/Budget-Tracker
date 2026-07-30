@@ -21,7 +21,19 @@ module.exports = async (req, res) => {
     const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.NG_APP_TELEGRAM_BOT_TOKEN || '';
     const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.NG_APP_FIREBASE_PROJECT_ID || 'positive-harbor-723';
 
-    const rawText = message.text || message.caption || '';
+    const rawText = (message.text || message.caption || '').replace(/['"]/g, '').trim();
+
+    // Ignore bot commands (/start, ping) without financial transactions
+    if (rawText.startsWith('/') || rawText.toLowerCase() === 'ping') {
+      if (TELEGRAM_BOT_TOKEN) {
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: '👋 *Budget Tracker Bot Online!* Send expenses like:\n`buy coffee 25000 for 2 cups`', parse_mode: 'Markdown' })
+        });
+      }
+      return res.status(200).json({ status: 'command_handled' });
+    }
 
     // Extract Amount
     const amountMatch = rawText.match(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/i);
@@ -33,9 +45,14 @@ module.exports = async (req, res) => {
       amount = rawNum;
     }
 
-    // Extract Quantity
-    const qtyMatch = rawText.match(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/i);
-    const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+    // Convert word quantities (two -> 2, dua -> 2)
+    let quantity = 1;
+    const qtyWordMatch = rawText.match(/(for|untuk)\s+(one|two|three|four|five|1|2|3|4|5|satu|dua|tiga)\s+(cups|pcs|pack|botol|porsi|buah|ikat)/i);
+    if (qtyWordMatch) {
+      const qVal = qtyWordMatch[2].toLowerCase();
+      const numMap = { one: 1, two: 2, three: 3, four: 4, five: 5, satu: 1, dua: 2, tiga: 3 };
+      quantity = numMap[qVal] || parseInt(qVal, 10) || 1;
+    }
 
     // Determine Category
     let category = 'food';
@@ -44,10 +61,10 @@ module.exports = async (req, res) => {
 
     const title = rawText
       .replace(/(\d+[\d\.]*)\s*(rupiah|rb|k|idr)?/gi, '')
-      .replace(/(\d+)\s*(cups|pcs|pack|botol|porsi|buah|ikat)/gi, '')
+      .replace(/(for|untuk)\s+(one|two|three|four|five|\d+)\s+(cups|pcs|pack|botol|porsi|buah|ikat)/gi, '')
       .replace(/^buy\s+/i, '')
       .replace(/^beli\s+/i, '')
-      .trim() || 'Telegram Expense';
+      .trim() || 'Telegram Purchase';
 
     // Store in Firestore Database via REST
     if (FIREBASE_PROJECT_ID) {
